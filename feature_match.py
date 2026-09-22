@@ -1,18 +1,70 @@
 # 라이브러리
 import cv2
 import numpy as np
+# import onnxruntime as ort
+
+ALIKED_PATH = "models/aliked-n16rot-top2k-1280.onnx"
+DISK_PATH = "models/"
 
 # 특징점 찾는 함수
 def detect_features(image, method="SIFT"):
     
     # 특징점 검출 방법 선택 SIFT, ORB, AKAZE
     if method == "SIFT":
-        detector = cv2.SIFT_create()
-    elif method == "ORB":
-        detector = cv2.ORB_create()
-    # AKAZE는 현재 사용불가 해당 AKAZE_create가 없음
-    # elif method == "AKAZE":
-    #     detector = cv2.AKAZE_create()
+        detector = cv2.SIFT.create()
+    elif method == "ORB":                       # ORB는 그레이스케일 이미지를 사용해야함
+        detector = cv2.ORB.create(
+            nfeatures=40000,                    # 최대 특징점 수
+            scaleFactor=1.2,                    # 스케일 변화율
+            nlevels=8,                          # 스케일의 레벨 수
+            edgeThreshold=31,                   # 엣지 임곗값
+            firstLevel=0,                       # 시작 피라미드 레벨
+            WTA_K=2,                            # 비교점
+            scoreType=cv2.ORB_HARRIS_SCORE,     # 점수 방식
+            patchSize=31,                       # 패치 크기
+            fastThreshold=20,                   # FAST 임곗값
+        )
+    # OpenCV 5.0에서 AKAZE는 현재 사용불가 해당 AKAZE_create가 없음
+    # OpenCV 5.0에서 ALIKED, DISK 추가됨
+    elif method == "ALIKED":
+        
+        params = cv2.ALIKED.Params()
+        params.inputSize = (1280, 1280)
+        
+        # ========== 테스트 코드 ========
+        # print("input size :", params.inputSize)
+        # print("backend:", params.backend)
+        # print("engine:", params.engine)
+        # print("normalizeDescriptors:", params.normalizeDescriptors)
+        # print("target:", params.target)
+        # session = ort.InferenceSession(
+        #     ALIKED_PATH,
+        #     providers=["CPUExecutionProvider"]
+        # )
+
+        # print("=== INPUT ===")
+
+        # for x in session.get_inputs():
+        #     print(x.name)
+        #     print(x.shape)
+        #     print(x.type)
+
+        # print("=== OUTPUT ===")
+
+        # for x in session.get_outputs():
+        #     print(x.name)
+        #     print(x.shape)
+        #     print(x.type)
+        # # ===============================
+
+        detector = cv2.ALIKED.create(
+            ALIKED_PATH,
+            params
+        )
+        
+            
+    elif method == "DISK":
+        detector = cv2.DISK.create(DISK_PATH)
     else:
         # 에러 발생시 즉시 중단하고 에러 출력
         raise ValueError(f"지원하지 않는 메소드 : {method}")
@@ -26,7 +78,7 @@ def detect_features(image, method="SIFT"):
 def match_features(des1, des2, method="SIFT"):
     # SIFT와 ORB는 비교 방식이 다르기 때문에 분기 필요
     # SIFT는 실수형태의 값을 사용
-    if method == "SIFT":
+    if method == "SIFT" or method == "ALIKED" :
         norm = cv2.NORM_L2          # 유클리드 거리
     # ORB는 바이너리 형태의 값을 사용
     elif method == "ORB":
@@ -74,7 +126,7 @@ def find_homography(pts1, pts2):
     pts2 = np.array(pts2, dtype=np.float32).reshape(-1, 2)
     
     # 대응점이 4개가 없으면 계산 불가
-    if len(pts1) < 4 | len(pts2) < 4:
+    if len(pts1) < 4 or len(pts2) < 4:
         return None, None
 
     # RANSAC를 사용하여 매칭 검사 pts1과 pts2의 점의 차이가 5픽셀 이내로 설정
