@@ -115,10 +115,12 @@ scan_result = scan_scene(
 
 best = scan_result["best"]
 
-if best is None:
-    logger.warning(
-        "최종적으로 객체를 검출하지 못했습니다."
-    )
+if (
+    best is None
+    or not best["result"].get("is_detection", False)
+    or best["result"].get("H") is None
+):
+    logger.warning("유효한 Homography를 찾지 못했습니다.")
 
 else:
     best_result = best["result"]

@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from logger import logger
 
-ALIKED_PATH = "models/aliked-n32-top2k-1280.onnx"
+ALIKED_PATH = "models/aliked-n16rot-top1k-1280.onnx"
 LIGHTGLUE_ONNX_PATH = "models/lightglue_for_aliked.onnx"
 DISK_PATH = "models/"
 
@@ -38,6 +38,8 @@ def detect_features(image, method="SIFT"):
         params.inputSize = (1280, 1280)
         params.normalizeDescriptors = True
 
+        cv2.ocl.setUseOpenCL(False)
+        
         detector = cv2.ALIKED.create(
             ALIKED_PATH,
             params
