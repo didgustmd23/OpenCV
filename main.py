@@ -39,23 +39,23 @@ cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 # 이미지 로드
 # ==========================================
 
-ref_path = "data/objects/Drone2.jpg"
-sce_path = "data/objects/Drone.JPEG"
+REF_PATH = "data/objects/TestData/Drone2.jpg"
+SCE_PATH = "data/objects/TestData/Drone.JPEG"
 
-ref_name = os.path.basename(ref_path)
-sce_name = os.path.basename(sce_path)
+ref_name = os.path.basename(REF_PATH)
+sce_name = os.path.basename(SCE_PATH)
 
-ref_img = cv2.imread(ref_path)  # 찾을 객체
-sce_img = cv2.imread(sce_path)  # 원본 이미지
+ref_img = cv2.imread(REF_PATH)  # 찾을 객체
+sce_img = cv2.imread(SCE_PATH)  # 원본 이미지
 
 if ref_img is None:
     raise FileNotFoundError(
-        f"Reference 이미지를 불러올 수 없습니다: {ref_path}"
+        f"Reference 이미지를 불러올 수 없습니다: {REF_PATH}"
     )
 
 if sce_img is None:
     raise FileNotFoundError(
-        f"Scene 이미지를 불러올 수 없습니다: {sce_path}"
+        f"Scene 이미지를 불러올 수 없습니다: {SCE_PATH}"
     )
 
 # ==========================================
@@ -109,7 +109,7 @@ scan_result = scan_scene(
     ),
     coarse_top_k=COARSE_TOP_K,
     early_stop_inliers=EARLY_STOP_INLIERS,
-    ref_name=ref_path,
+    ref_name=REF_PATH,
     method=METHOD,
 )
 
@@ -195,8 +195,8 @@ else:
         3,
         cv2.LINE_AA,
     )
-    cv2.imwrite(f"results/matching/{METHOD}_result.png", scene_result)
+    cv2.imwrite(f"results/object_detection/{METHOD}_result.png", scene_result)
     
-    cv2.imshow("Scene result", scene_result)
-    cv2.waitKey()
-    cv2.destroyAllWindows()
+    # cv2.imshow("Scene result", scene_result)
+    # cv2.waitKey()
+    # cv2.destroyAllWindows()
