@@ -77,11 +77,9 @@ def find_object(
         method
     )
 
-    logger.debug(f"사용 방법: {method}")
-    logger.debug(f"Reference 이미지: {os.path.basename(ref_name)}")
-    logger.debug(f"Scene 이미지: {os.path.basename(sce_name)}")
-    logger.debug(f"reference 특징점: {len(kp1)}")
-    logger.debug(f"scene 특징점: {len(kp2)}")
+    logger.debug("method %s: Reference Image: %s Scene Image: %s", method, ref_name, sce_name)
+    logger.debug(f"reference keypoint: {len(kp1)}")
+    logger.debug(f"scene keypoint: {len(kp2)}")
 
     # ==========================================
     # Reference와 Scene 특징점 매칭

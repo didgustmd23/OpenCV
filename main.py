@@ -1,3 +1,4 @@
+import os
 import cv2
 import time
 import numpy as np
@@ -40,6 +41,9 @@ cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 
 ref_path = "data/objects/Drone2.jpg"
 sce_path = "data/objects/Drone.JPEG"
+
+ref_name = os.path.basename(ref_path)
+sce_name = os.path.basename(sce_path)
 
 ref_img = cv2.imread(ref_path)  # 찾을 객체
 sce_img = cv2.imread(sce_path)  # 원본 이미지
@@ -189,3 +193,8 @@ else:
         3,
         cv2.LINE_AA,
     )
+    cv2.imwrite(f"results/matching/{METHOD}_result.png", scene_result)
+    
+    cv2.imshow("Scene result", scene_result)
+    cv2.waitKey()
+    cv2.destroyAllWindows()
