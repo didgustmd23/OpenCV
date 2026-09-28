@@ -52,3 +52,18 @@ def project_path(path):
         return path
 
     return PROJECT_ROOT / path
+
+
+# ==========================================
+# 객체 검출 결과 폴더 생성
+# - 입력 사진 세트와 특징점 방법별로 결과 분리
+# - 예: results/object_detection/set01/SIFT/
+# ==========================================
+def get_object_detection_output_dir(input_dir, method):
+    input_dir = project_path(input_dir)
+
+    return (
+        OBJECT_DETECTION_RESULT_DIR
+        / input_dir.name
+        / str(method).upper()
+    )

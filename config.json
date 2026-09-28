@@ -45,7 +45,7 @@
   },
   "pipeline": {
     "default_input_dir": "data/panorama",
-    "default_reference_path": "data/objects/target.jpg"
+    "default_reference_path": "data/objects/target1.jpg"
   },
   "logging": {
     "python_level": "INFO",

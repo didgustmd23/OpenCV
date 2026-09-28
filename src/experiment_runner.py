@@ -27,60 +27,87 @@ def _numeric_sort_key(value):
 # - target1.jpg -> {"1": Path(...)} 형태로 반환
 # - panorama1.jpg도 같은 방식으로 처리
 # ==========================================
-def _collect_images(directory, prefix):
+def _collect_images(directory, prefix, recursive=False):
     directory = Path(directory)
     images = {}
 
-    for path in directory.glob("*.jpg"):
+    paths = directory.rglob("*.jpg") if recursive else directory.glob("*.jpg")
+
+    for path in paths:
         if path.stem.lower().startswith(prefix):
             suffix = path.stem[len(prefix):]
-            if suffix:
-                images[suffix] = path
+            # targetN.jpg, panoramaN.jpg 형식의 숫자 번호만 테스트 케이스로 사용
+            # panorama_outline.jpg, panorama.jpg 같은 보조 결과는 제외
+            if not suffix.isdigit():
+                continue
+
+            if suffix in images:
+                raise ValueError(
+                    f"{prefix}{suffix}.jpg 파일이 여러 개 발견되었습니다: "
+                    f"{images[suffix]}, {path}"
+                )
+
+            images[suffix] = path
 
     return images
 
 
 # ==========================================
 # 자동 테스트 세트 생성
-# - targetN.jpg와 panoramaN.jpg를 번호 기준으로 연결
+# - targetN.jpg와 방법별 panoramaN.jpg를 번호 기준으로 연결
 # - 짝이 없는 파일은 조용히 제외하지 않고 오류로 안내
-# - 반환: (case_name, reference_path, panorama_path) 목록
+# - 반환: (case_name, reference_path, {method: panorama_path}) 목록
 # ==========================================
-def discover_test_cases(target_dir, panorama_result_dir):
+def discover_test_cases(target_dir, panorama_result_dir, methods):
     targets = _collect_images(target_dir, "target")
-    panoramas = _collect_images(panorama_result_dir, "panorama")
+    panorama_result_dir = Path(panorama_result_dir)
+    panorama_paths = {}
 
-    missing_panoramas = sorted(
-        set(targets) - set(panoramas),
-        key=_numeric_sort_key,
-    )
-    missing_targets = sorted(
-        set(panoramas) - set(targets),
-        key=_numeric_sort_key,
-    )
-
-    if missing_panoramas or missing_targets:
-        raise ValueError(
-            "짝이 맞지 않는 데이터가 있습니다. "
-            f"파노라마 없음={missing_panoramas}, "
-            f"기준 물체 없음={missing_targets}"
+    # ==========================================
+    # 방법별 파노라마 결과 수집
+    # - SIFT / ORB / ALIKED가 각각 합성한 panoramaN.jpg 사용
+    # - 객체 검출도 같은 방법으로 실행해 전체 파이프라인 비교
+    # ==========================================
+    for method in methods:
+        method_name = str(method).upper()
+        panoramas = _collect_images(
+            panorama_result_dir / method_name,
+            "panorama",
         )
 
-    case_ids = sorted(
-        set(targets) & set(panoramas),
-        key=_numeric_sort_key,
-    )
+        missing_panoramas = sorted(
+            set(targets) - set(panoramas),
+            key=_numeric_sort_key,
+        )
+        missing_targets = sorted(
+            set(panoramas) - set(targets),
+            key=_numeric_sort_key,
+        )
+
+        if missing_panoramas or missing_targets:
+            raise ValueError(
+                f"{method_name} 파노라마-기준 물체 짝이 맞지 않습니다. "
+                f"파노라마 없음={missing_panoramas}, "
+                f"기준 물체 없음={missing_targets}"
+            )
+
+        panorama_paths[method_name] = panoramas
+
+    case_ids = sorted(targets, key=_numeric_sort_key)
 
     if not case_ids:
         raise FileNotFoundError(
-            "target*.jpg와 panorama*.jpg 쌍을 찾을 수 없습니다."
+            "targetN.jpg 파일을 찾을 수 없습니다."
         )
 
     return [
         (
             f"target{case_id}_panorama{case_id}",
             str(targets[case_id]),
-            str(panoramas[case_id]),
+            {
+                method: str(panorama_paths[method][case_id])
+                for method in panorama_paths
+            },
         )
         for case_id in case_ids
     ]
@@ -252,6 +279,7 @@ def detect_and_save(
     record = {
         "case": case_name,
         "method": method,
+        "panorama_path": str(scene_path),
         "condition": condition_name,
         "rotation_deg": condition.get("rotation_deg", 0.0),
         "scale_factor": condition.get("scale_factor", 1.0),
@@ -351,8 +379,8 @@ def detect_and_save(
 
 # ==========================================
 # 전체 테스트 세트 일괄 실행
-# - 모든 (Reference, Panorama) 케이스를 순차 처리
-# - 각 케이스마다 조건별 SIFT / ORB / ALIKED 실행
+# - 모든 (Reference, 방법별 Panorama) 케이스를 순차 처리
+# - 각 방법이 직접 합성한 Panorama에서 같은 방법으로 객체 검출 실행
 # - 결과 레코드 목록 반환
 # ==========================================
 def run_batch(
@@ -371,13 +399,14 @@ def run_batch(
     records = []
 
     for condition in conditions:
-        for case_name, ref_path, scene_path in test_cases:
+        for case_name, ref_path, panorama_paths in test_cases:
             for method in methods:
+                method_name = str(method).upper()
                 record = detect_and_save(
                     case_name,
                     ref_path,
-                    scene_path,
-                    method,
+                    panorama_paths[method_name],
+                    method_name,
                     condition=condition,
                     tile_size=tile_size,
                     coarse_stride=coarse_stride,

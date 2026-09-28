@@ -1,5 +1,7 @@
 # 라이브러리 추가
 import os
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -566,3 +568,186 @@ def get_global_corners(
         "tile": corners_tile,
         "global": corners_global,
     }
+
+
+# ==========================================
+# 파노라마에서 기준 물체 검출
+# - 기준 물체 특징점은 한 번만 추출한 뒤 모든 Tile 탐색에 재사용
+# - Coarse-to-Fine 탐색으로 최종 후보 Tile을 선택
+# - 최종 Homography를 전체 파노라마 좌표로 변환해 Polygon 표시
+# ==========================================
+def detect_object_in_panorama(
+    ref_img,
+    panorama_img,
+    reference_path,
+    method,
+    output_dir,
+):
+    global FEATURE_MATCH_DIR, SAVE_FEATURE_MATCHES
+
+    # tile_scanner.py가 find_object()를 사용하므로 순환 import를 피하기 위해
+    # 전체 파노라마 검출을 시작하는 시점에만 불러온다.
+    from src.tile_scanner import scan_scene
+
+    method = str(method).upper()
+    tile_size = tuple(OBJECT_DETECTION_CONFIG["tile_size"])
+    coarse_stride = tuple(OBJECT_DETECTION_CONFIG["coarse_stride"])
+    fine_stride = tuple(OBJECT_DETECTION_CONFIG["fine_stride"])
+
+    # ==========================================
+    # 기준 물체 특징점 사전 계산
+    # - Tile마다 같은 기준 물체 특징점을 다시 계산하지 않도록 재사용
+    # ==========================================
+    keypoints_ref, descriptors_ref = detect_features(
+        ref_img,
+        method=method,
+    )
+    ref_features = (keypoints_ref, descriptors_ref)
+
+    logger.info(
+        "객체 검출 시작: method=%s, reference_keypoints=%d",
+        method,
+        len(keypoints_ref),
+    )
+
+    # ==========================================
+    # Coarse-to-Fine Tile 탐색
+    # - 모든 Tile 매칭 이미지는 세트명/방법별 폴더에 저장
+    # ==========================================
+    output_dir = Path(output_dir)
+    matching_root = MATCHING_RESULT_DIR / output_dir.parent.name
+    previous_match_dir = FEATURE_MATCH_DIR
+    FEATURE_MATCH_DIR = str(matching_root)
+
+    try:
+        scan_result = scan_scene(
+            ref_img=ref_img,
+            sce_img=panorama_img,
+            ref_features=ref_features,
+            tile_size=tile_size,
+            coarse_stride=coarse_stride,
+            fine_stride=fine_stride,
+            coarse_top_k=OBJECT_DETECTION_CONFIG["coarse_top_k"],
+            early_stop_inliers=OBJECT_DETECTION_CONFIG["early_stop_inliers"],
+            ref_name=str(reference_path),
+            method=method,
+        )
+    finally:
+        FEATURE_MATCH_DIR = previous_match_dir
+
+    best = scan_result["best"]
+    result_image = panorama_img.copy()
+    record = {
+        "method": method,
+        "is_detection": False,
+        "reference_keypoints": len(keypoints_ref),
+        "coarse_checked": scan_result["stats"]["coarse_checked"],
+        "fine_checked": scan_result["stats"]["fine_checked"],
+        "elapsed": scan_result["stats"]["elapsed"],
+        "result_path": None,
+        "matching_path": None,
+    }
+
+    if best is None:
+        logger.warning("객체 검출 실패: 유효한 Tile 후보가 없습니다.")
+        return result_image, record
+
+    best_result = best["result"]
+    tile_x, tile_y = best["x"], best["y"]
+    scene_height, scene_width = panorama_img.shape[:2]
+    tile_width, tile_height = tile_size
+    tile_x2 = min(tile_x + tile_width, scene_width)
+    tile_y2 = min(tile_y + tile_height, scene_height)
+    best_tile = panorama_img[tile_y:tile_y2, tile_x:tile_x2]
+
+    # ==========================================
+    # 최종 후보 Tile 매칭 이미지 저장
+    # - SAVE_FINAL_MATCHES 설정에 따라 final_matches.png 생성
+    # ==========================================
+    previous_save_matches = SAVE_FEATURE_MATCHES
+    previous_match_dir = FEATURE_MATCH_DIR
+    SAVE_FEATURE_MATCHES = SAVE_FINAL_MATCHES
+    FEATURE_MATCH_DIR = str(matching_root)
+
+    try:
+        final_result = find_object(
+            ref_img,
+            best_tile,
+            method=method,
+            ref_name=str(reference_path),
+            sce_name="final",
+            ref_features=ref_features,
+            coarse_mode=False,
+        )
+    finally:
+        SAVE_FEATURE_MATCHES = previous_save_matches
+        FEATURE_MATCH_DIR = previous_match_dir
+
+    matching_path = matching_root / method / "final_matches.png"
+    if SAVE_FINAL_MATCHES and matching_path.is_file():
+        record["matching_path"] = str(matching_path)
+
+    # ==========================================
+    # 검출 실패 기록
+    # - 최고 후보의 통계를 남겨 실패 사례를 분석할 수 있도록 구성
+    # ==========================================
+    if (
+        not best_result.get("is_detection", False)
+        or best_result.get("H") is None
+    ):
+        record.update(
+            {
+                "best_tile": [tile_x, tile_y],
+                "best_match_count": best_result["match_count"],
+                "best_inlier_count": best_result["inlier_count"],
+                "best_inlier_ratio": best_result["inlier_ratio"],
+                "minimum_inliers": MIN_INLIERS,
+            }
+        )
+        logger.warning(
+            "객체 검출 실패: best_tile=(%d, %d), matches=%d, "
+            "inliers=%d, min_required=%d",
+            tile_x,
+            tile_y,
+            best_result["match_count"],
+            best_result["inlier_count"],
+            MIN_INLIERS,
+        )
+        return result_image, record
+
+    detection_result = final_result or best_result
+    corner_result = get_global_corners(
+        ref_img=ref_img,
+        H_tile=detection_result["H"],
+        tile_origin=(tile_x, tile_y),
+    )
+    corners_global = np.int32(np.round(corner_result["global"]))
+
+    cv2.polylines(
+        result_image,
+        [corners_global],
+        True,
+        (0, 255, 0),
+        3,
+        cv2.LINE_AA,
+    )
+
+    record.update(
+        {
+            "is_detection": True,
+            "tile": [tile_x, tile_y, tile_x2, tile_y2],
+            "match_count": detection_result["match_count"],
+            "inlier_count": detection_result["inlier_count"],
+            "inlier_ratio": detection_result["inlier_ratio"],
+        }
+    )
+
+    logger.info(
+        "객체 검출 완료: tile=%s, matches=%d, inliers=%d, ratio=%.3f",
+        record["tile"],
+        record["match_count"],
+        record["inlier_count"],
+        record["inlier_ratio"],
+    )
+
+    return result_image, record
