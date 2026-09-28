@@ -1,5 +1,5 @@
-import argparse
 import csv
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -15,7 +15,6 @@ from src.image_io import list_image_files, read_image, save_image
 from src.logger import logger
 from src.project_paths import (
     PANORAMA_RESULT_DIR,
-    PANORAMA_SOURCE_DIR,
     project_path,
 )
 from src.settings import PANORAMA_CONFIG
@@ -459,6 +458,7 @@ def stitch_panorama(
     ransac_threshold=PANORAMA_CONFIG["ransac_reproj_threshold"],
     max_side=PANORAMA_CONFIG["max_side"],
     output_root=PANORAMA_RESULT_DIR,
+    set_name=None,
     export_path=None,
 ):
     method = method.upper()
@@ -484,13 +484,17 @@ def stitch_panorama(
         )
 
     output_root = project_path(output_root)
+    set_name = str(set_name or input_dir.name)
 
-    # 입력 폴더명이 결과 루트명과 같으면
-    # results/panorama/panorama/SIFT 같은 중복 경로를 만들지 않음
-    if input_dir.name.lower() == output_root.name.lower():
-        output_dir = output_root / method
-    else:
-        output_dir = output_root / input_dir.name / method
+    if not set_name or Path(set_name).name != set_name:
+        raise ValueError("set_name은 폴더명만 지정해야 합니다.")
+
+    # ==========================================
+    # 세트·방법별 결과 폴더 생성
+    # - 예: results/panorama/set01/SIFT/
+    # - 여러 파노라마 세트의 합성 이미지와 매칭 통계를 분리
+    # ==========================================
+    output_dir = output_root / set_name / method
     matching_dir = output_dir / "matching"
     output_dir.mkdir(parents=True, exist_ok=True)
     matching_dir.mkdir(parents=True, exist_ok=True)
@@ -558,94 +562,3 @@ def stitch_panorama(
         "stats_path": stats_path,
         "export_path": export_result,
     }
-
-
-# ==========================================
-# 명령줄 실행 설정
-# - --input: 연속 사진 세트 폴더
-# - --method: SIFT / ORB / ALIKED
-# - --export: 객체 검출용 파노라마 이미지 저장 경로
-# ==========================================
-def parse_arguments():
-    parser = argparse.ArgumentParser(
-        description="특징점 매칭 기반 파노라마 생성",
-    )
-    parser.add_argument(
-        "--input",
-        default=str(PANORAMA_SOURCE_DIR / "set01"),
-        help="연속 사진이 들어 있는 폴더",
-    )
-    parser.add_argument(
-        "--method",
-        "--detector",
-        dest="method",
-        type=str.lower,
-        choices=[method.lower() for method in SUPPORTED_METHODS],
-        default=PANORAMA_CONFIG["default_method"].lower(),
-        help="특징점 방법",
-    )
-    parser.add_argument(
-        "--ratio",
-        type=float,
-        default=PANORAMA_CONFIG["lowe_ratio"],
-        help="SIFT / ORB Lowe Ratio Test 기준",
-    )
-    parser.add_argument(
-        "--ransac",
-        type=float,
-        default=PANORAMA_CONFIG["ransac_reproj_threshold"],
-        help="RANSAC 재투영 오차 기준",
-    )
-    parser.add_argument(
-        "--max-side",
-        type=int,
-        default=PANORAMA_CONFIG["max_side"],
-        help="입력 이미지 긴 변의 최대 크기",
-    )
-    parser.add_argument(
-        "--output-root",
-        default=str(PANORAMA_RESULT_DIR),
-        help="파노라마 결과 루트 폴더",
-    )
-    parser.add_argument(
-        "--export",
-        default=None,
-        help="객체 검출용 완성 파노라마 저장 경로",
-    )
-
-    return parser.parse_args()
-
-
-# ==========================================
-# 명령줄 진입점
-# ==========================================
-def main():
-    args = parse_arguments()
-    result = stitch_panorama(
-        input_dir=args.input,
-        method=args.method,
-        ratio=args.ratio,
-        ransac_threshold=args.ransac,
-        max_side=args.max_side,
-        output_root=args.output_root,
-        export_path=args.export,
-    )
-
-    print(f"\n완료: {len(result['input_paths'])}장 합성")
-    print(f"파노라마: {result['panorama_path']}")
-    print(f"매칭 통계: {result['stats_path']}")
-
-    if result["export_path"] is not None:
-        print(f"객체 검출용 내보내기: {result['export_path']}")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except (
-        ValueError,
-        OSError,
-        cv2.error,
-        np.linalg.LinAlgError,
-    ) as error:
-        raise SystemExit(f"오류: {error}")

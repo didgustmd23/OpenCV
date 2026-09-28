@@ -1,6 +1,8 @@
 import csv
+import re
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -9,7 +11,109 @@ import numpy as np
 import src.object_finder as object_finder
 from src.feature_match import detect_features
 from src.object_finder import get_global_corners
+from src.project_paths import MATCHING_RESULT_DIR, OBJECT_DETECTION_RESULT_DIR
+from src.settings import OBJECT_DETECTION_CONFIG
 from src.tile_scanner import scan_scene
+
+
+# ==========================================
+# 객체 검출 실험 환경 설정
+# - 노트북과 일괄 실험에서 동일한 타일·방법·결과 경로를 사용
+# - 기본 탐색 값은 config.json의 object_detection 영역을 재사용
+# ==========================================
+@dataclass(frozen=True)
+class ExperimentSettings:
+    panorama_max_side: int
+    methods: tuple
+    tile_size: tuple
+    coarse_stride: tuple
+    fine_stride: tuple
+    coarse_top_k: int
+    early_stop_inliers: int
+    result_root: Path
+    matching_root: Path
+    metrics_dir: Path
+    conditions: tuple
+    condition_labels: dict
+
+
+# ==========================================
+# 객체 검출 실험 환경 생성
+# - 노트북에서 직접 선언하던 공통 환경값을 한 곳에서 관리
+# ==========================================
+def get_experiment_settings():
+    return ExperimentSettings(
+        panorama_max_side=2048,
+        methods=tuple(OBJECT_DETECTION_CONFIG["methods"]),
+        tile_size=tuple(OBJECT_DETECTION_CONFIG["tile_size"]),
+        coarse_stride=tuple(OBJECT_DETECTION_CONFIG["coarse_stride"]),
+        fine_stride=tuple(OBJECT_DETECTION_CONFIG["fine_stride"]),
+        coarse_top_k=OBJECT_DETECTION_CONFIG["coarse_top_k"],
+        early_stop_inliers=OBJECT_DETECTION_CONFIG["early_stop_inliers"],
+        result_root=OBJECT_DETECTION_RESULT_DIR / "batch",
+        matching_root=MATCHING_RESULT_DIR,
+        metrics_dir=OBJECT_DETECTION_RESULT_DIR / "metrics",
+        conditions=(
+            {
+                "name": "baseline",
+                "rotation_deg": 0,
+                "scale_factor": 1.0,
+                "brightness_factor": 1.0,
+                "save_visuals": True,
+            },
+            {
+                "name": "rotation_minus30",
+                "rotation_deg": -30,
+                "scale_factor": 1.0,
+                "brightness_factor": 1.0,
+                "save_visuals": False,
+            },
+            {
+                "name": "rotation_plus30",
+                "rotation_deg": 30,
+                "scale_factor": 1.0,
+                "brightness_factor": 1.0,
+                "save_visuals": False,
+            },
+            {
+                "name": "scale_075",
+                "rotation_deg": 0,
+                "scale_factor": 0.75,
+                "brightness_factor": 1.0,
+                "save_visuals": False,
+            },
+            {
+                "name": "scale_125",
+                "rotation_deg": 0,
+                "scale_factor": 1.25,
+                "brightness_factor": 1.0,
+                "save_visuals": False,
+            },
+            {
+                "name": "brightness_070",
+                "rotation_deg": 0,
+                "scale_factor": 1.0,
+                "brightness_factor": 0.70,
+                "save_visuals": False,
+            },
+            {
+                "name": "brightness_130",
+                "rotation_deg": 0,
+                "scale_factor": 1.0,
+                "brightness_factor": 1.30,
+                "save_visuals": False,
+            },
+        ),
+        condition_labels={
+            "baseline": "기본",
+            "rotation_minus30": "회전 -30°",
+            "rotation_plus30": "회전 +30°",
+            "scale_075": "크기 75%",
+            "scale_125": "크기 125%",
+            "brightness_070": "조명 70%",
+            "brightness_130": "조명 130%",
+        },
+    )
 
 
 # ==========================================
@@ -24,7 +128,7 @@ def _numeric_sort_key(value):
 # ==========================================
 # 접두사 기준 이미지 파일 수집
 # - 지정한 폴더에서 *.jpg 파일 탐색
-# - target1.jpg -> {"1": Path(...)} 형태로 반환
+# - set01/target.jpg -> {"1": Path(...)} 형태로 반환
 # - panorama1.jpg도 같은 방식으로 처리
 # ==========================================
 def _collect_images(directory, prefix, recursive=False):
@@ -36,7 +140,7 @@ def _collect_images(directory, prefix, recursive=False):
     for path in paths:
         if path.stem.lower().startswith(prefix):
             suffix = path.stem[len(prefix):]
-            # targetN.jpg, panoramaN.jpg 형식의 숫자 번호만 테스트 케이스로 사용
+            # setN/target.jpg, panoramaN.jpg 형식의 숫자 번호만 테스트 케이스로 사용
             # panorama_outline.jpg, panorama.jpg 같은 보조 결과는 제외
             if not suffix.isdigit():
                 continue
@@ -53,26 +157,105 @@ def _collect_images(directory, prefix, recursive=False):
 
 
 # ==========================================
+# 세트별 파노라마 결과 수집
+# - results/panorama/set01/SIFT/panorama.jpg 형식을 사용
+# - set01의 번호를 set01/target.jpg와 연결할 실험 번호로 사용
+# ==========================================
+# ==========================================
+# 세트별 기준 물체 이미지 수집
+# - data/objects/set01/target.jpg 형식을 사용
+# - set01의 번호를 {"1": Path(...)} 형태로 반환
+# ==========================================
+def _collect_targets(directory):
+    directory = Path(directory)
+    targets = {}
+
+    for path in directory.rglob("*"):
+        if not path.is_file() or path.name.lower() != "target.jpg":
+            continue
+
+        match = re.fullmatch(
+            r"set(\d+)",
+            path.parent.name,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            raise ValueError(
+                "기준 물체는 set번호/target.jpg 형식으로 저장해야 합니다: "
+                f"{path}"
+            )
+
+        case_id = str(int(match.group(1)))
+
+        if case_id in targets:
+            raise ValueError(
+                f"기준 물체 세트 번호 {case_id}가 중복됩니다. "
+                f"{targets[case_id]}, {path}"
+            )
+
+        targets[case_id] = path
+
+    return targets
+
+
+def _collect_panorama_results(panorama_result_dir, method):
+    panorama_result_dir = Path(panorama_result_dir)
+    method_name = str(method).upper()
+    panoramas = {}
+
+    for path in panorama_result_dir.rglob("panorama.jpg"):
+        if path.parent.name.upper() != method_name:
+            continue
+
+        set_name = path.parent.parent.name
+
+        # 이전 구조(results/panorama/SIFT/panorama.jpg)는 세트 번호가 없어
+        # 새 세트별 실험 탐색에서 제외한다.
+        if path.parent.parent == panorama_result_dir:
+            continue
+
+        match = re.search(r"(\d+)$", set_name)
+
+        if match is None:
+            raise ValueError(
+                "파노라마 세트 폴더명 끝에 번호가 필요합니다: "
+                f"{path.parent.parent}"
+            )
+
+        case_id = str(int(match.group()))
+
+        if case_id in panoramas:
+            raise ValueError(
+                f"{method_name}의 세트 번호 {case_id}가 중복됩니다: "
+                f"{panoramas[case_id]}, {path}"
+            )
+
+        panoramas[case_id] = path
+
+    return panoramas
+
+
+# ==========================================
 # 자동 테스트 세트 생성
-# - targetN.jpg와 방법별 panoramaN.jpg를 번호 기준으로 연결
+# - setN/target.jpg와 방법별 setN/panorama.jpg를 번호 기준으로 연결
 # - 짝이 없는 파일은 조용히 제외하지 않고 오류로 안내
 # - 반환: (case_name, reference_path, {method: panorama_path}) 목록
 # ==========================================
 def discover_test_cases(target_dir, panorama_result_dir, methods):
-    targets = _collect_images(target_dir, "target")
+    targets = _collect_targets(target_dir)
     panorama_result_dir = Path(panorama_result_dir)
     panorama_paths = {}
 
     # ==========================================
     # 방법별 파노라마 결과 수집
-    # - SIFT / ORB / ALIKED가 각각 합성한 panoramaN.jpg 사용
+    # - SIFT / ORB / ALIKED가 각각 합성한 세트별 panorama.jpg 사용
     # - 객체 검출도 같은 방법으로 실행해 전체 파이프라인 비교
     # ==========================================
     for method in methods:
         method_name = str(method).upper()
-        panoramas = _collect_images(
-            panorama_result_dir / method_name,
-            "panorama",
+        panoramas = _collect_panorama_results(
+            panorama_result_dir,
+            method_name,
         )
 
         missing_panoramas = sorted(
@@ -97,12 +280,12 @@ def discover_test_cases(target_dir, panorama_result_dir, methods):
 
     if not case_ids:
         raise FileNotFoundError(
-            "targetN.jpg 파일을 찾을 수 없습니다."
+            "setN/target.jpg 파일을 찾을 수 없습니다."
         )
 
     return [
         (
-            f"target{case_id}_panorama{case_id}",
+            f"set{int(case_id):02d}",
             str(targets[case_id]),
             {
                 method: str(panorama_paths[method][case_id])
@@ -111,6 +294,403 @@ def discover_test_cases(target_dir, panorama_result_dir, methods):
         )
         for case_id in case_ids
     ]
+
+
+# ==========================================
+# 파노라마 합성 통계 수집
+# - 세트·방법별 matching_stats.csv를 자동 탐색
+# - 이전 세트 없는 결과 폴더는 집계에서 제외
+# ==========================================
+def collect_panorama_summary(panorama_result_dir, methods):
+    panorama_result_dir = Path(panorama_result_dir)
+    method_names = {str(method).upper() for method in methods}
+    summary_rows = []
+
+    for stats_path in sorted(
+        panorama_result_dir.rglob("matching_stats.csv")
+    ):
+        method_name = stats_path.parent.name.upper()
+
+        if method_name not in method_names:
+            continue
+
+        set_dir = stats_path.parent.parent
+
+        if set_dir == panorama_result_dir:
+            continue
+
+        with stats_path.open(
+            encoding="utf-8-sig",
+            newline="",
+        ) as file:
+            pair_rows = list(csv.DictReader(file))
+
+        if not pair_rows:
+            continue
+
+        panorama_path = stats_path.parent / "panorama.jpg"
+        summary_rows.append(
+            {
+                "set": set_dir.name,
+                "method": method_name,
+                "pair_count": len(pair_rows),
+                "mean_raw_matches": float(
+                    np.mean(
+                        [
+                            int(row["raw_match_count"])
+                            for row in pair_rows
+                        ]
+                    )
+                ),
+                "mean_filtered_matches": float(
+                    np.mean(
+                        [
+                            int(row["filtered_match_count"])
+                            for row in pair_rows
+                        ]
+                    )
+                ),
+                "mean_inliers": float(
+                    np.mean(
+                        [
+                            int(row["inlier_count"])
+                            for row in pair_rows
+                        ]
+                    )
+                ),
+                "mean_inlier_ratio": float(
+                    np.mean(
+                        [
+                            float(row["inlier_ratio"])
+                            for row in pair_rows
+                        ]
+                    )
+                ),
+                "panorama_path": (
+                    str(panorama_path)
+                    if panorama_path.is_file()
+                    else None
+                ),
+            }
+        )
+
+    if not summary_rows:
+        raise FileNotFoundError(
+            "세트별 파노라마 matching_stats.csv를 찾을 수 없습니다."
+        )
+
+    return summary_rows
+
+
+# ==========================================
+# 파노라마 합성 통계표 생성
+# - Matplotlib 객체를 받아 노트북에서 재사용
+# - 표 생성만 담당하고 출력은 호출한 셀에서 처리
+# ==========================================
+def create_panorama_summary_figure(summary_rows, pyplot):
+    table_rows = [
+        [
+            row["set"],
+            row["method"],
+            row["pair_count"],
+            f"{row['mean_raw_matches']:.1f}",
+            f"{row['mean_filtered_matches']:.1f}",
+            f"{row['mean_inliers']:.1f}",
+            f"{row['mean_inlier_ratio']:.3f}",
+        ]
+        for row in summary_rows
+    ]
+
+    figure, axis = pyplot.subplots(
+        figsize=(12, max(3, 0.5 * len(table_rows) + 1.5))
+    )
+    axis.axis("off")
+    table = axis.table(
+        cellText=table_rows,
+        colLabels=[
+            "세트",
+            "방법",
+            "사진 쌍",
+            "평균 원시 매칭",
+            "평균 필터링 매칭",
+            "평균 Inlier",
+            "평균 Inlier 비율",
+        ],
+        cellLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.4)
+    axis.set_title(
+        "방법별 파노라마 합성 매칭 통계",
+        fontsize=16,
+        pad=18,
+    )
+
+    return figure
+
+
+# ==========================================
+# 객체 검출 정량 결과 공통 데이터 준비
+# - 조건·방법 조합별 요약 행을 빠르게 조회할 수 있도록 구성
+# ==========================================
+def _prepare_detection_summary(summary_rows, experiment):
+    condition_names = [
+        condition["name"]
+        for condition in experiment.conditions
+    ]
+    summary_by_key = {
+        (row["method"], row["condition"]): row
+        for row in summary_rows
+    }
+
+    missing_keys = [
+        (method, condition_name)
+        for condition_name in condition_names
+        for method in experiment.methods
+        if (method, condition_name) not in summary_by_key
+    ]
+
+    if missing_keys:
+        raise ValueError(
+            "정량 비교에 필요한 실험 요약 행이 없습니다: "
+            f"{missing_keys}"
+        )
+
+    return condition_names, summary_by_key
+
+
+# ==========================================
+# 객체 검출 정량 비교표 생성
+# - 방법·변형 조건별 성공률, 시간, Inlier 비율을 표로 표시
+# ==========================================
+def create_detection_summary_table_figure(
+    summary_rows,
+    experiment,
+    pyplot,
+):
+    condition_names, summary_by_key = _prepare_detection_summary(
+        summary_rows,
+        experiment,
+    )
+    table_rows = []
+
+    for condition_name in condition_names:
+        for method in experiment.methods:
+            row = summary_by_key[(method, condition_name)]
+            table_rows.append(
+                [
+                    experiment.condition_labels[condition_name],
+                    method,
+                    f"{row['detection_count']}/{row['total_cases']}",
+                    f"{row['success_rate'] * 100:.1f}%",
+                    f"{row['mean_elapsed']:.2f}초",
+                    f"{row['mean_inlier_ratio']:.3f}",
+                ]
+            )
+
+    figure, axis = pyplot.subplots(
+        figsize=(12, max(4, 0.42 * len(table_rows) + 1.5))
+    )
+    axis.axis("off")
+    table = axis.table(
+        cellText=table_rows,
+        colLabels=[
+            "조건",
+            "방법",
+            "성공/전체",
+            "검출 성공률",
+            "평균 시간",
+            "평균 Inlier 비율",
+        ],
+        cellLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.4)
+    axis.set_title(
+        "SIFT / ORB / ALIKED 매칭 정확도·속도 비교표",
+        fontsize=16,
+        pad=18,
+    )
+
+    return figure
+
+
+# ==========================================
+# 객체 검출 최종 Tile 매칭 통계표 생성
+# - 지정 조건에서 검출에 성공한 최종 Fine Tile의 매칭 품질을 방법별 비교
+# - match_count는 Ratio Test 또는 LightGlue 이후, RANSAC 이전 매칭 수
+# ==========================================
+def create_detection_matching_summary_figure(
+    records,
+    experiment,
+    pyplot,
+    visual_condition="baseline",
+):
+    condition_records = [
+        record
+        for record in records
+        if record["condition"] == visual_condition
+    ]
+    if not condition_records:
+        raise ValueError(
+            "매칭 통계를 만들 객체 검출 기록이 없습니다: "
+            f"condition={visual_condition}"
+        )
+
+    table_rows = []
+    for method in experiment.methods:
+        method_records = [
+            record
+            for record in condition_records
+            if record["method"] == method
+        ]
+        if not method_records:
+            raise ValueError(
+                "매칭 통계를 만들 방법별 객체 검출 기록이 없습니다: "
+                f"method={method}, condition={visual_condition}"
+            )
+
+        detection_records = [
+            record
+            for record in method_records
+            if record["is_detection"]
+        ]
+        detection_count = len(detection_records)
+        mean_keypoints = sum(
+            record["keypoints"]
+            for record in method_records
+        ) / len(method_records)
+
+        if detection_count:
+            mean_match_count = sum(
+                record["match_count"]
+                for record in detection_records
+            ) / detection_count
+            mean_inlier_count = sum(
+                record["inlier_count"]
+                for record in detection_records
+            ) / detection_count
+            mean_inlier_ratio = sum(
+                record["inlier_ratio"]
+                for record in detection_records
+            ) / detection_count
+            matching_values = [
+                f"{mean_match_count:.1f}",
+                f"{mean_inlier_count:.1f}",
+                f"{mean_inlier_ratio:.3f}",
+            ]
+        else:
+            matching_values = ["-", "-", "-"]
+
+        table_rows.append(
+            [
+                method,
+                str(len(method_records)),
+                f"{detection_count}/{len(method_records)}",
+                f"{mean_keypoints:.1f}",
+                *matching_values,
+            ]
+        )
+
+    condition_label = experiment.condition_labels.get(
+        visual_condition,
+        visual_condition,
+    )
+    figure, axis = pyplot.subplots(figsize=(14, 4.5))
+    axis.axis("off")
+    table = axis.table(
+        cellText=table_rows,
+        colLabels=[
+            "방법",
+            "전체 케이스",
+            "검출 성공",
+            "평균 기준 특징점",
+            "평균 RANSAC 전 매칭",
+            "평균 Inlier",
+            "평균 Inlier 비율",
+        ],
+        cellLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.5)
+    axis.set_title(
+        f"{condition_label} 조건: 방법별 객체 검출 최종 Tile 매칭 통계",
+        fontsize=16,
+        pad=18,
+    )
+
+    return figure
+
+
+# ==========================================
+# 객체 검출 정량 비교 그래프 생성
+# - 조건별 검출 성공률과 평균 실행 시간을 막대그래프로 비교
+# ==========================================
+def create_detection_summary_chart_figure(
+    summary_rows,
+    experiment,
+    pyplot,
+):
+    condition_names, summary_by_key = _prepare_detection_summary(
+        summary_rows,
+        experiment,
+    )
+    x_positions = np.arange(len(condition_names))
+    bar_width = 0.24
+    figure, axes = pyplot.subplots(
+        1,
+        2,
+        figsize=(18, 6),
+        constrained_layout=True,
+    )
+    method_center = (len(experiment.methods) - 1) / 2
+
+    for index, method in enumerate(experiment.methods):
+        success_rates = [
+            summary_by_key[(method, name)]["success_rate"] * 100
+            for name in condition_names
+        ]
+        elapsed_times = [
+            summary_by_key[(method, name)]["mean_elapsed"]
+            for name in condition_names
+        ]
+        offset = (index - method_center) * bar_width
+        axes[0].bar(
+            x_positions + offset,
+            success_rates,
+            bar_width,
+            label=method,
+        )
+        axes[1].bar(
+            x_positions + offset,
+            elapsed_times,
+            bar_width,
+            label=method,
+        )
+
+    labels = [
+        experiment.condition_labels[name]
+        for name in condition_names
+    ]
+    axes[0].set_title("조건별 검출 성공률")
+    axes[0].set_ylabel("성공률 (%)")
+    axes[0].set_ylim(0, 100)
+    axes[1].set_title("조건별 평균 실행 시간")
+    axes[1].set_ylabel("실행 시간 (초)")
+
+    for axis in axes:
+        axis.set_xticks(x_positions)
+        axis.set_xticklabels(labels, rotation=30, ha="right")
+        axis.legend()
+        axis.grid(axis="y", alpha=0.25)
+
+    return figure
 
 
 # ==========================================
@@ -574,3 +1154,79 @@ def read_image_for_display(path, max_width=500):
         )
 
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+# ==========================================
+# 객체 검출 정성적 결과 시각화
+# - 위: Global Polygon이 표시된 최종 검출 결과
+# - 아래: 최종 Fine Tile Keypoint Matches
+# ==========================================
+def create_detection_qualitative_figure(
+    test_cases,
+    experiment,
+    pyplot,
+    visual_condition="baseline",
+):
+    if not test_cases:
+        raise ValueError("시각화할 객체 검출 테스트 세트가 없습니다.")
+
+    methods = tuple(experiment.methods)
+    if not methods:
+        raise ValueError("시각화할 특징점 방법이 없습니다.")
+
+    figure, axes = pyplot.subplots(
+        2 * len(test_cases),
+        len(methods),
+        figsize=(20, 8 * len(test_cases)),
+        constrained_layout=True,
+    )
+    axes = np.asarray(axes, dtype=object).reshape(
+        2 * len(test_cases),
+        len(methods),
+    )
+
+    for row, (case_name, _, _) in enumerate(test_cases):
+        case_dir = experiment.result_root / case_name / visual_condition
+
+        for column, method in enumerate(methods):
+            result_axis = axes[2 * row, column]
+            result_path = case_dir / f"{method}_result.png"
+            result_axis.imshow(read_image_for_display(result_path))
+            result_axis.set_title(
+                f"{case_name} / {method} 검출 결과",
+                fontsize=11,
+            )
+
+            match_axis = axes[2 * row + 1, column]
+            match_path = case_dir / f"{method}_keypoint_matches.png"
+            if match_path.is_file():
+                match_axis.imshow(
+                    read_image_for_display(
+                        match_path,
+                        max_width=700,
+                    )
+                )
+            else:
+                match_axis.text(
+                    0.5,
+                    0.5,
+                    "최종 Fine 후보 또는 매칭 이미지가 없습니다.",
+                    ha="center",
+                    va="center",
+                    wrap=True,
+                )
+            match_axis.set_title(
+                f"{case_name} / {method} 최종 Tile 매칭",
+                fontsize=11,
+            )
+
+            for axis in (result_axis, match_axis):
+                axis.set_xticks([])
+                axis.set_yticks([])
+
+    figure.suptitle(
+        "기본 조건: 파노라마 객체 검출 결과와 최종 Tile Keypoint Matches",
+        fontsize=18,
+    )
+
+    return figure

@@ -2,8 +2,8 @@
   "paths": {
     "data_dir": "data",
     "objects_dir": "data/objects",
-    "panorama_source_dir": "data/panorama_sets",
-    "panorama_image_dir": "data/panorama",
+    "panorama_source_dir": "data",
+    "panorama_image_dir": "data/set01",
     "models_dir": "models",
     "results_dir": "results",
     "log_dir": "results/logs",
@@ -44,8 +44,8 @@
     "max_canvas_pixels": 20000000
   },
   "pipeline": {
-    "default_input_dir": "data/panorama",
-    "default_reference_path": "data/objects/target1.jpg"
+    "default_input_dir": "data/set01",
+    "default_reference_path": "data/objects/set01/target.jpg"
   },
   "logging": {
     "python_level": "INFO",

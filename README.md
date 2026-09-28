@@ -2,7 +2,7 @@
 
 ## 주제
 
-특징점 매칭과 호모그래피를 이용해 연속 사진을 파노라마로 합성하고, 완성된 파노라마에서 기준 물체의 위치를 검출하는 프로젝트입니다. SIFT·ORB·AKAZE 방법의 매칭 정확도와 실행 시간을 비교하고, 회전·크기·조명 변화에 대한 검출 성능도 실험합니다.
+특징점 매칭과 호모그래피를 이용해 연속 사진을 파노라마로 합성하고, 완성된 파노라마에서 기준 물체의 위치를 검출하는 프로젝트입니다. SIFT·ORB·ALIKED 방법의 매칭 정확도와 실행 시간을 비교하고, 회전·크기·조명 변화에 대한 검출 성능도 실험합니다. 과제 안내의 AKAZE는 현재 OpenCV 5.0 환경에서 사용할 수 없어 ALIKED로 대체했습니다.
 
 ## 역할 분담
 
@@ -16,22 +16,23 @@
 
 ```text
 src/                           # 프로젝트 실행 코드
-├── main.py                    # 단일 객체 검출 실행
-├── stitcher.py                # 파노라마 합성 실행
-├── experiment_runner.py       # 객체 검출 일괄 실험
+├── pipeline.py                # 파노라마 합성 · 객체 검출 전체 실행
+├── main.py                    # 개별 기능 테스트 · 디버그 실행
+├── stitcher.py                # 파노라마 합성 핵심 기능
+├── experiment_runner.py       # 일괄 실험·통계·노트북 시각화 도우미
 ├── feature_match.py           # 특징점 추출·매칭 공통 기능
 ├── object_finder.py           # 호모그래피 기반 객체 검출
 ├── tile_scanner.py            # Coarse-to-Fine 타일 탐색
 ├── image_io.py                # 이미지 파일 입출력
 ├── project_paths.py           # 공통 경로
-└── settings.py                # config.json 로더
+├── settings.py                # config.json 로더
+├── logger.py                  # 콘솔·opencv.log 기록 설정
+├── result_cleanup.py          # 생성 결과 정리 기능
+└── __init__.py                # src 패키지 표시 파일
 
 data/
-├── objects/                    # 기준 물체 이미지: target1.jpg ...
-├── panorama_sets/              # 파노라마 원본 연속 사진
-│   └── set01/                  # 01.jpg, 02.jpg, 03.jpg ...
-└── panorama/                   # 객체 검출에 사용할 완성 파노라마
-    └── panorama1.jpg
+├── objects/                    # 기준 물체: set01/target.jpg ...
+└── set01/                      # 파노라마 원본 연속 사진: 01.jpg, 02.jpg, 03.jpg ...
 
 results/
 ├── panorama/                   # 파노라마 합성 결과
@@ -41,51 +42,67 @@ results/
 │       ├── panorama_outline.jpg
 │       └── matching_stats.csv
 ├── object_detection/           # 객체 검출 결과와 실험 통계
-├── matching/keypoint_matches/  # 객체 검출 최종 타일 매칭 이미지
-└── logs/opencv.log
+├── matching/keypoint_matches/  # Coarse·Fine 타일 및 최종 후보 매칭 이미지
+├── debug/                      # main.py 디버그 결과
+└── logs/opencv.log             # 실행 로그
 ```
 
-## 파노라마 생성
+## 파노라마 합성만 테스트
 
-실행 전 [config.json](config.json)에서 공통 설정을 확인합니다. 기본값으로 바로 실행할 수 있으며, 타일 크기·매칭 기준·모델 경로·결과 폴더를 변경할 때만 수정하면 됩니다.
+연속 사진의 합성 기능만 확인할 때는 `src.main`의 stitch 디버그 모드를 사용합니다. 실행 전 [config.json](config.json)에서 파노라마 매칭 기준, 모델 경로, 결과 폴더를 확인합니다.
 
 ```powershell
-python -m src.stitcher --input data/panorama_sets/set01 --method sift
+python -m src.main --mode stitch --input data/set01 --method sift --max-side 1600
 ```
 
-객체 검출용 파노라마까지 함께 저장하려면 `--export` 경로를 지정합니다.
+결과는 `results/debug/panorama/set01/SIFT/`에 저장됩니다. 이 경로는 테스트 전용이므로, 정식 결과인 `results/panorama/`를 덮어쓰지 않습니다.
 
-```powershell
-python -m src.stitcher --input data/panorama_sets/set01 --method sift --export data/panorama/panorama1.jpg
-```
-
-`stitcher.py`는 SIFT·ORB는 BFMatcher와 Lowe Ratio Test를, ALIKED는 LightGlue 매칭을 공통 모듈에서 재사용합니다.
+`stitcher.py`는 명령줄 진입점 없이 `stitch_panorama()`를 제공하는 내부 합성 모듈입니다. SIFT·ORB에는 BFMatcher와 Lowe Ratio Test를, ALIKED에는 LightGlue 매칭을 사용합니다.
 
 ## 파노라마 합성 · 객체 검출 전체 실행
 
 연속 사진을 합성한 뒤, 생성된 파노라마 메모리 이미지에서 기준 물체를 바로 검출합니다.
 
 ```powershell
-python -m src.main --input data/panorama --reference data/objects/target.jpg --method sift --max-side 1024
+python -m src.pipeline --input data/set01 --reference data/objects/set01/target.jpg --method sift --max-side 1024
+```
+
+합성한 파노라마를 다른 경로에도 복사하려면 `--export`를 추가합니다. 기본 결과 경로는 그대로 유지됩니다.
+
+```powershell
+python -m src.pipeline --input data/set01 --reference data/objects/set01/target.jpg --method sift --export data/exported_panorama.jpg
 ```
 
 결과는 아래 위치에 저장됩니다.
 
 ```text
-results/panorama/SIFT/                         # 파노라마와 인접 사진 매칭 결과
-results/object_detection/세트명/SIFT/          # 검출 결과와 요약 JSON
-results/matching/keypoint_matches/세트명/SIFT/ # Coarse·Fine 모든 Tile과 최종 후보 매칭 이미지
+results/panorama/{입력_폴더명}/SIFT/                   # 파노라마·인접 사진 매칭 결과
+results/object_detection/{입력_폴더명}/SIFT/          # 검출 결과와 요약 JSON
+results/matching/keypoint_matches/{입력_폴더명}/SIFT/ # Coarse·Fine Tile과 final_matches.png
 ```
+
+`config.json`의 `object_detection.save_feature_matches`가 참이면 Coarse·Fine 탐색 타일의 매칭 이미지를 저장하고, `save_final_matches`가 참이면 최종 후보의 `final_matches.png`를 추가로 저장합니다.
+
+## 개별 기능 테스트·디버그
+
+`src.main`은 전체 파이프라인을 실행하지 않습니다. 파노라마 합성 또는 완성된 파노라마의 객체 검출을 각각 확인할 때 사용합니다.
+
+```powershell
+# 완성 파노라마의 객체 검출 기능만 테스트
+python -m src.main --mode detect --scene results/panorama/set01/SIFT/panorama.jpg --reference data/objects/set01/target.jpg --method sift
+```
+
+디버그 결과는 `results/debug/` 아래에 저장됩니다.
 
 ## 실행 요약 파일: `pipeline_summary.json`
 
-`src.main` 실행이 끝나면 아래 경로에 파노라마 합성과 객체 검출의 핵심 결과를 JSON으로 저장합니다.
+`src.pipeline` 실행이 끝나면 아래 경로에 파노라마 합성과 객체 검출의 핵심 결과를 JSON으로 저장합니다.
 
 ```text
 results/object_detection/{입력 폴더명}/{METHOD}/pipeline_summary.json
 ```
 
-예를 들어 `data/panorama` 폴더를 SIFT로 실행하면 `results/object_detection/panorama/SIFT/pipeline_summary.json`이 생성됩니다.
+예를 들어 `data/set01` 폴더를 SIFT로 실행하면 `results/object_detection/set01/SIFT/pipeline_summary.json`이 생성됩니다.
 
 | 항목 | 설명 |
 | --- | --- |
@@ -95,6 +112,7 @@ results/object_detection/{입력 폴더명}/{METHOD}/pipeline_summary.json
 | `panorama_path` | 생성된 파노라마 이미지 경로 |
 | `panorama_outline_path` | 파노라마 외곽선 확인 이미지 경로 |
 | `panorama_matching_stats` | 인접 사진끼리의 원시·필터링·RANSAC 매칭 수 CSV 경로 |
+| `panorama_export_path` | `--export`를 지정했을 때 추가 저장한 파노라마 경로. 미지정 시 `null` |
 | `detection` | Coarse-to-Fine 객체 탐색 결과 |
 
 `detection`에는 다음 값을 기록합니다.
@@ -124,7 +142,7 @@ results/object_detection/metrics/method_condition_summary.csv
 
 ### `experiment_records.csv`
 
-각 **테스트 케이스 × 조건 × 메서드**의 원본 결과를 한 행씩 기록합니다. 실패 사례를 확인하거나 특정 이미지의 검출 결과를 추적할 때 사용합니다.
+각 **테스트 케이스 × 조건 × 메서드**의 원본 결과를 한 행씩 기록합니다. 실패 사례를 확인하거나 특정 이미지의 검출 결과를 추적할 때 사용합니다. 기본 조건은 검출 결과와 최종 Tile 매칭 이미지를 저장하며, 나머지 변형 조건은 실행 시간을 줄이기 위해 기본적으로 수치만 기록합니다.
 
 | 주요 열 | 설명 |
 | --- | --- |
@@ -163,7 +181,18 @@ results/object_detection/metrics/method_condition_summary.csv
 - `matching`: Lowe Ratio Test, RANSAC, 최소 Inlier 수
 - `object_detection`: 타일 크기·간격·조기 종료 기준
 - `panorama`: 파노라마 비율 검사·RANSAC·입력 축소·캔버스 제한
-- `pipeline`: main.py의 기본 연속 사진·기준 물체 입력 경로
+- `pipeline`: pipeline.py의 기본 연속 사진·기준 물체 입력 경로
 - `logging`: Python·OpenCV 로그 수준
 
 입력 폴더, 기준 물체/파노라마 조합, 실행 방법처럼 실행마다 달라지는 값은 명령줄 인자 또는 노트북 셀에서 지정합니다.
+
+## 결과 파일 정리
+
+`result_cleanup.py`의 `clear_results()`는 `results/` 아래에서 생성된 파일만 정리합니다. `.gitkeep`, `opencv.log`, 폴더 구조는 유지합니다. 기본값은 삭제하지 않고 대상만 반환하는 미리 보기 모드입니다.
+
+```python
+from src.result_cleanup import clear_results
+
+targets = clear_results()             # 삭제 대상 확인
+clear_results(dry_run=False)          # 확인 후 실제 삭제
+```
