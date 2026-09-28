@@ -1,0 +1,54 @@
+{
+  "paths": {
+    "data_dir": "data",
+    "objects_dir": "data/objects",
+    "panorama_source_dir": "data/panorama_sets",
+    "panorama_image_dir": "data/panorama",
+    "models_dir": "models",
+    "results_dir": "results",
+    "log_dir": "results/logs",
+    "matching_result_dir": "results/matching/keypoint_matches",
+    "object_detection_result_dir": "results/object_detection",
+    "panorama_result_dir": "results/panorama"
+  },
+  "models": {
+    "aliked_path": "models/aliked-n16rot-top1k-1280.onnx",
+    "lightglue_aliked_path": "models/lightglue_for_aliked.onnx",
+    "disk_dir": "models"
+  },
+  "matching": {
+    "lowe_ratio": 0.75,
+    "ransac_reproj_threshold": 5.0,
+    "min_inliers": 8
+  },
+  "object_detection": {
+    "methods": ["SIFT", "ORB", "ALIKED"],
+    "default_method": "SIFT",
+    "tile_size": [512, 512],
+    "coarse_stride": [512, 512],
+    "fine_stride": [256, 256],
+    "coarse_top_k": 3,
+    "early_stop_inliers": 50,
+    "minimum_tile_size": [300, 250],
+    "save_feature_matches": true,
+    "save_final_matches": true
+  },
+  "panorama": {
+    "methods": ["SIFT", "ORB", "ALIKED"],
+    "default_method": "SIFT",
+    "lowe_ratio": 0.75,
+    "ransac_reproj_threshold": 4.0,
+    "max_side": 1600,
+    "min_images": 3,
+    "max_canvas_side": 20000,
+    "max_canvas_pixels": 20000000
+  },
+  "pipeline": {
+    "default_input_dir": "data/panorama",
+    "default_reference_path": "data/objects/target.jpg"
+  },
+  "logging": {
+    "python_level": "INFO",
+    "opencv_level": "ERROR"
+  }
+}
