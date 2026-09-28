@@ -1,18 +1,18 @@
 # OpenCV 파노라마 · 객체 검출 프로젝트
 
-## 주제
+## 1. 주제
 
 특징점 매칭과 호모그래피를 이용해 연속 사진을 파노라마로 합성하고, 완성된 파노라마에서 기준 물체의 위치를 검출하는 프로젝트입니다. SIFT·ORB·ALIKED 방법의 매칭 정확도와 실행 시간을 비교하고, 회전·크기·조명 변화에 대한 검출 성능도 실험합니다. 과제 안내의 AKAZE는 현재 OpenCV 5.0 환경에서 사용할 수 없어 ALIKED로 대체했습니다.
 
-## 역할 분담
+## 2. 역할 분담
 
-| 구분 | 담당 업무 |
-| --- | --- |
-| 파노라마 담당 | 연속 사진 데이터 준비, 특징점 매칭·RANSAC 기반 파노라마 합성, 블렌딩 결과 확인 |
-| 객체 검출 담당 | 기준 물체-파노라마 매칭, Coarse-to-Fine 타일 탐색, 객체 외곽 Polygon 표시 |
-| 공동 작업 | SIFT·ORB·ALIKED 성능 비교, 회전·크기·조명 변화 실험, 실패 사례 분석, 보고서·발표 자료 작성 |
+| 구분 | 담당자 | 담당 업무 |
+| --- | --- | --- |
+| 파노라마 | 담당 | 연속 사진 데이터 준비, 특징점 매칭·RANSAC 기반 파노라마 합성, 블렌딩 결과 확인 |
+| 객체 검출 | 담당 | 기준 물체-파노라마 매칭, Coarse-to-Fine 타일 탐색, 객체 외곽 Polygon 표시 |
+| 공동 작업 | 담당 | SIFT·ORB·ALIKED 성능 비교, 회전·크기·조명 변화 실험, 실패 사례 분석, 보고서·발표 자료 작성 |
 
-## 폴더 구성
+## 3. 폴더 구성
 
 ```text
 src/                           # 프로젝트 실행 코드
@@ -47,7 +47,9 @@ results/
 └── logs/opencv.log             # 실행 로그
 ```
 
-## 파노라마 합성만 테스트
+## 4. 실행 방법
+
+### 4.1 파노라마 합성만 테스트
 
 연속 사진의 합성 기능만 확인할 때는 `src.main`의 stitch 디버그 모드를 사용합니다. 실행 전 [config.json](config.json)에서 파노라마 매칭 기준, 모델 경로, 결과 폴더를 확인합니다.
 
@@ -59,7 +61,7 @@ python -m src.main --mode stitch --input data/set01 --method sift --max-side 160
 
 `stitcher.py`는 명령줄 진입점 없이 `stitch_panorama()`를 제공하는 내부 합성 모듈입니다. SIFT·ORB에는 BFMatcher와 Lowe Ratio Test를, ALIKED에는 LightGlue 매칭을 사용합니다.
 
-## 파노라마 합성 · 객체 검출 전체 실행
+### 4.2 파노라마 합성 · 객체 검출 전체 실행
 
 연속 사진을 합성한 뒤, 생성된 파노라마 메모리 이미지에서 기준 물체를 바로 검출합니다.
 
@@ -83,7 +85,13 @@ results/matching/keypoint_matches/{입력_폴더명}/SIFT/ # Coarse·Fine Tile�
 
 `config.json`의 `object_detection.save_feature_matches`가 참이면 Coarse·Fine 탐색 타일의 매칭 이미지를 저장하고, `save_final_matches`가 참이면 최종 후보의 `final_matches.png`를 추가로 저장합니다.
 
-## 개별 기능 테스트·디버그
+### 4.3 노트북 일괄 파노라마 실험
+
+최종보고서용 `FinalReport.ipynb`는 `data/` 아래의 `set01`, `set02` 형식 폴더를 자동 탐색합니다. 발견한 각 세트에 SIFT, ORB, ALIKED를 적용해 파노라마를 만들고, 결과를 `results/panorama/{세트명}/{방법}/`에 분리 저장합니다.
+
+객체 검출 실험까지 이어서 수행하려면 세트 번호를 기준 물체 폴더와 맞춥니다. 예를 들어 `data/set01/`에는 연속 사진을, `data/objects/set01/target.jpg`에는 해당 세트의 기준 물체를 둡니다.
+
+### 4.4 개별 기능 테스트·디버그
 
 `src.main`은 전체 파이프라인을 실행하지 않습니다. 파노라마 합성 또는 완성된 파노라마의 객체 검출을 각각 확인할 때 사용합니다.
 
@@ -94,7 +102,7 @@ python -m src.main --mode detect --scene results/panorama/set01/SIFT/panorama.jp
 
 디버그 결과는 `results/debug/` 아래에 저장됩니다.
 
-## 실행 요약 파일: `pipeline_summary.json`
+## 5. 실행 요약 파일: `pipeline_summary.json`
 
 `src.pipeline` 실행이 끝나면 아래 경로에 파노라마 합성과 객체 검출의 핵심 결과를 JSON으로 저장합니다.
 
@@ -131,7 +139,7 @@ results/object_detection/{입력 폴더명}/{METHOD}/pipeline_summary.json
 
 `inlier_count`가 `config.json`의 `matching.min_inliers` 이상이면 검출 성공으로 판단합니다. 메서드별 `elapsed`, `match_count`, `inlier_count`, `inlier_ratio`를 비교하면 속도와 매칭 품질을 보고서 표로 정리할 수 있습니다.
 
-## 실험 결과 CSV
+## 6. 실험 결과 CSV
 
 `experiment_runner.py`로 기준 물체의 회전, 크기, 밝기를 바꿔 실험하면 아래 두 CSV가 생성됩니다.
 
@@ -140,7 +148,7 @@ results/object_detection/metrics/experiment_records.csv
 results/object_detection/metrics/method_condition_summary.csv
 ```
 
-### `experiment_records.csv`
+### 6.1 `experiment_records.csv`
 
 각 **테스트 케이스 × 조건 × 메서드**의 원본 결과를 한 행씩 기록합니다. 실패 사례를 확인하거나 특정 이미지의 검출 결과를 추적할 때 사용합니다. 기본 조건은 검출 결과와 최종 Tile 매칭 이미지를 저장하며, 나머지 변형 조건은 실행 시간을 줄이기 위해 기본적으로 수치만 기록합니다.
 
@@ -156,7 +164,7 @@ results/object_detection/metrics/method_condition_summary.csv
 | `tile` | 최종 객체가 선택된 파노라마 타일 좌표 |
 | `result_path`, `match_image_path` | 검출 Polygon 이미지와 특징점 매칭 이미지 경로 |
 
-### `method_condition_summary.csv`
+### 6.2 `method_condition_summary.csv`
 
 동일한 **메서드 × 조건**의 `experiment_records.csv` 행을 집계한 비교표입니다. 발표·보고서에는 이 파일을 우선 사용합니다.
 
@@ -172,7 +180,7 @@ results/object_detection/metrics/method_condition_summary.csv
 
 예를 들어 `rotation_plus30` 행의 `success_rate`는 30도 회전에도 해당 방법이 얼마나 안정적으로 물체를 찾는지 나타냅니다. 속도는 `mean_elapsed`, 매칭 신뢰도는 `mean_inlier_ratio`, 검출 안정성은 `success_rate`를 중심으로 비교합니다.
 
-## 공통 설정
+## 7. 공통 설정
 
 프로젝트 공통 값은 `config.json`에서 관리합니다.
 
@@ -186,7 +194,7 @@ results/object_detection/metrics/method_condition_summary.csv
 
 입력 폴더, 기준 물체/파노라마 조합, 실행 방법처럼 실행마다 달라지는 값은 명령줄 인자 또는 노트북 셀에서 지정합니다.
 
-## 결과 파일 정리
+## 8. 결과 파일 정리
 
 `result_cleanup.py`의 `clear_results()`는 `results/` 아래에서 생성된 파일만 정리합니다. `.gitkeep`, `opencv.log`, 폴더 구조는 유지합니다. 기본값은 삭제하지 않고 대상만 반환하는 미리 보기 모드입니다.
 

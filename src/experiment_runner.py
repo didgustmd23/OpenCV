@@ -11,8 +11,14 @@ import numpy as np
 import src.object_finder as object_finder
 from src.feature_match import detect_features
 from src.object_finder import get_global_corners
-from src.project_paths import MATCHING_RESULT_DIR, OBJECT_DETECTION_RESULT_DIR
+from src.project_paths import (
+    MATCHING_RESULT_DIR,
+    OBJECT_DETECTION_RESULT_DIR,
+    PANORAMA_RESULT_DIR,
+    PANORAMA_SOURCE_DIR,
+)
 from src.settings import OBJECT_DETECTION_CONFIG
+from src.stitcher import stitch_panorama
 from src.tile_scanner import scan_scene
 
 
@@ -123,6 +129,73 @@ def get_experiment_settings():
 # ==========================================
 def _numeric_sort_key(value):
     return (0, int(value)) if value.isdigit() else (1, value.lower())
+
+
+# ==========================================
+# 파노라마 원본 세트 자동 탐색
+# - data/set01, data/set02 ... 형식의 폴더를 번호순으로 수집
+# - 반환: (set01, Path(...)) 형태의 목록
+# ==========================================
+def discover_panorama_source_sets(source_root=PANORAMA_SOURCE_DIR):
+    source_root = Path(source_root)
+    source_sets = []
+
+    for path in source_root.glob("set*"):
+        if not path.is_dir():
+            continue
+
+        match = re.fullmatch(
+            r"set(\d+)",
+            path.name,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            raise ValueError(
+                "파노라마 세트 폴더는 set번호 형식이어야 합니다: "
+                f"{path.name}"
+            )
+
+        set_name = f"set{int(match.group(1)):02d}"
+        source_sets.append((set_name, path))
+
+    if not source_sets:
+        raise FileNotFoundError(
+            "파노라마 세트 폴더를 찾을 수 없습니다: "
+            f"{source_root}"
+        )
+
+    return sorted(
+        source_sets,
+        key=lambda item: _numeric_sort_key(item[0][3:]),
+    )
+
+
+# ==========================================
+# 파노라마 합성 일괄 실행
+# - 발견한 모든 세트에 지정한 특징점 방법을 적용
+# - stitcher.py의 결과를 세트·방법별 폴더에 저장
+# ==========================================
+def run_panorama_experiments(
+    source_root,
+    methods,
+    max_side,
+    *,
+    output_root=PANORAMA_RESULT_DIR,
+):
+    results = []
+
+    for set_name, source_dir in discover_panorama_source_sets(source_root):
+        for method in methods:
+            result = stitch_panorama(
+                input_dir=source_dir,
+                method=method,
+                max_side=max_side,
+                output_root=output_root,
+                set_name=set_name,
+            )
+            results.append(result)
+
+    return results
 
 
 # ==========================================
@@ -426,6 +499,249 @@ def create_panorama_summary_figure(summary_rows, pyplot):
         "방법별 파노라마 합성 매칭 통계",
         fontsize=16,
         pad=18,
+    )
+
+    return figure
+
+
+# ==========================================
+# 파노라마 결과 시각화용 세트 행 선택
+# - set_name을 생략하면 첫 번째 세트를 사용
+# - 지정한 세트의 방법별 통계 행을 정렬해 반환
+# ==========================================
+def _select_panorama_visual_rows(summary_rows, set_name=None):
+    available_sets = sorted({row["set"] for row in summary_rows})
+
+    if not available_sets:
+        raise ValueError("시각화할 파노라마 통계가 없습니다.")
+
+    selected_set = set_name or available_sets[0]
+    rows = sorted(
+        (
+            row
+            for row in summary_rows
+            if row["set"] == selected_set
+        ),
+        key=lambda row: row["method"],
+    )
+
+    if not rows:
+        raise ValueError(
+            f"시각화할 파노라마 세트가 없습니다: {selected_set}"
+        )
+
+    return selected_set, rows
+
+
+# ==========================================
+# 방법별 필터링 매칭 이미지 비교 Figure 생성
+# - 지정한 인접 사진 쌍의 filtered 매칭 이미지를 방법별로 표시
+# ==========================================
+def create_panorama_filtered_match_figure(
+    summary_rows,
+    panorama_result_dir,
+    pyplot,
+    *,
+    set_name=None,
+    pair_name="pair_01_02",
+):
+    selected_set, rows = _select_panorama_visual_rows(
+        summary_rows,
+        set_name,
+    )
+    panorama_result_dir = Path(panorama_result_dir)
+    figure, axes = pyplot.subplots(
+        1,
+        len(rows),
+        figsize=(7 * len(rows), 4),
+        constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
+
+    for axis, row in zip(axes, rows):
+        matching_path = (
+            panorama_result_dir
+            / selected_set
+            / row["method"]
+            / "matching"
+            / f"{pair_name}_filtered.png"
+        )
+
+        if matching_path.is_file():
+            axis.imshow(
+                read_image_for_display(
+                    matching_path,
+                    max_width=900,
+                )
+            )
+        else:
+            axis.text(
+                0.5,
+                0.5,
+                "필터링 매칭 이미지가 없습니다.",
+                ha="center",
+                va="center",
+                wrap=True,
+            )
+
+        axis.set_title(
+            f"{row['method']} / {pair_name} 필터링 매칭"
+        )
+        axis.set_xticks([])
+        axis.set_yticks([])
+
+    figure.suptitle(
+        f"방법별 인접 사진 필터링 매칭: {selected_set}",
+        fontsize=16,
+    )
+
+    return figure
+
+
+# ==========================================
+# 파노라마 매칭 단계별 이미지 Figure 생성
+# - raw / filtered / ransac 매칭 이미지를 한 화면에 표시
+# ==========================================
+def create_panorama_matching_gallery_figure(
+    panorama_result_dir,
+    set_name,
+    method,
+    pyplot,
+    *,
+    column_count=3,
+):
+    matching_dir = (
+        Path(panorama_result_dir)
+        / str(set_name)
+        / str(method).upper()
+        / "matching"
+    )
+    matching_paths = sorted(matching_dir.glob("*.png"))
+
+    if not matching_paths:
+        raise FileNotFoundError(
+            f"매칭 이미지를 찾을 수 없습니다: {matching_dir}"
+        )
+    if column_count <= 0:
+        raise ValueError("column_count는 양수여야 합니다.")
+
+    row_count = (
+        len(matching_paths) + column_count - 1
+    ) // column_count
+    figure, axes = pyplot.subplots(
+        row_count,
+        column_count,
+        figsize=(6 * column_count, 5 * row_count),
+        constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes).ravel()
+
+    for axis, matching_path in zip(axes, matching_paths):
+        axis.imshow(
+            read_image_for_display(
+                matching_path,
+                max_width=800,
+            )
+        )
+        axis.set_title(
+            matching_path.stem.replace("_", " "),
+            fontsize=11,
+        )
+        axis.set_xticks([])
+        axis.set_yticks([])
+
+    for axis in axes[len(matching_paths):]:
+        axis.axis("off")
+
+    figure.suptitle(
+        f"{set_name} / {str(method).upper()} 파노라마 매칭 단계별 결과",
+        fontsize=16,
+    )
+
+    return figure
+
+
+# ==========================================
+# 방법별 파노라마·윤곽선 Figure 생성
+# - 첫 행에는 합성 결과, 둘째 행에는 원본 사진 배치 윤곽선 표시
+# ==========================================
+def create_panorama_result_comparison_figure(
+    summary_rows,
+    pyplot,
+    *,
+    set_name=None,
+):
+    selected_set, rows = _select_panorama_visual_rows(
+        summary_rows,
+        set_name,
+    )
+    figure, axes = pyplot.subplots(
+        2,
+        len(rows),
+        figsize=(7 * len(rows), 9),
+        constrained_layout=True,
+    )
+    axes = np.asarray(axes, dtype=object).reshape(2, len(rows))
+
+    for column, row in enumerate(rows):
+        panorama_axis = axes[0, column]
+        outline_axis = axes[1, column]
+        panorama_path = row["panorama_path"]
+
+        if panorama_path is not None and Path(panorama_path).is_file():
+            panorama_path = Path(panorama_path)
+            panorama_axis.imshow(
+                read_image_for_display(
+                    panorama_path,
+                    max_width=900,
+                )
+            )
+            outline_path = panorama_path.parent / "panorama_outline.jpg"
+
+            if outline_path.is_file():
+                outline_axis.imshow(
+                    read_image_for_display(
+                        outline_path,
+                        max_width=900,
+                    )
+                )
+            else:
+                outline_axis.text(
+                    0.5,
+                    0.5,
+                    "합성 윤곽선 이미지가 없습니다.",
+                    ha="center",
+                    va="center",
+                    wrap=True,
+                )
+        else:
+            panorama_axis.text(
+                0.5,
+                0.5,
+                "파노라마 이미지가 없습니다.",
+                ha="center",
+                va="center",
+                wrap=True,
+            )
+            outline_axis.text(
+                0.5,
+                0.5,
+                "합성 윤곽선 이미지가 없습니다.",
+                ha="center",
+                va="center",
+                wrap=True,
+            )
+
+        panorama_axis.set_title(f"{row['method']} 파노라마")
+        outline_axis.set_title(f"{row['method']} 합성 윤곽선")
+
+        for axis in (panorama_axis, outline_axis):
+            axis.set_xticks([])
+            axis.set_yticks([])
+
+    figure.suptitle(
+        f"방법별 파노라마 합성 결과: {selected_set}",
+        fontsize=18,
     )
 
     return figure
