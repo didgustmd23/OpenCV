@@ -3,8 +3,10 @@ import os
 import cv2
 import numpy as np
 
-from logger import logger
-from feature_match import (
+from src.logger import logger
+from src.project_paths import MATCHING_RESULT_DIR
+from src.settings import MATCHING_CONFIG, OBJECT_DETECTION_CONFIG
+from src.feature_match import (
     detect_features,
     match_features,
     ratio_test,
@@ -15,7 +17,15 @@ from feature_match import (
 
 
 # 객체 검출로 인정하기 위한 최소 RANSAC Inlier 개수
-MIN_INLIERS = 8
+MIN_INLIERS = MATCHING_CONFIG["min_inliers"]
+LOWE_RATIO = MATCHING_CONFIG["lowe_ratio"]
+
+# Homography 계산 전 Tile 특징점 매칭 결과 저장 설정
+SAVE_FEATURE_MATCHES = OBJECT_DETECTION_CONFIG["save_feature_matches"]
+
+# 최종 선택 Tile의 final_matches.png 저장 설정
+SAVE_FINAL_MATCHES = OBJECT_DETECTION_CONFIG["save_final_matches"]
+FEATURE_MATCH_DIR = str(MATCHING_RESULT_DIR)
 
 
 # ==========================================
@@ -113,9 +123,56 @@ def find_object(
     if method == "ALIKED":
         good_matches = matches
     else:
-        good_matches = ratio_test(matches, ratio=0.75)
+        good_matches = ratio_test(
+            matches,
+            ratio=LOWE_RATIO,
+        )
 
     logger.debug(f"좋은 매칭: {len(good_matches)}")
+
+    # ==========================================
+    # 특징점 매칭 결과 저장
+    # - Reference와 현재 Scene/Tile을 좌우로 배치
+    # - 실제로 선택된 good_matches만 선으로 연결
+    # - Homography 계산에 실패하더라도 매칭 상태를 확인할 수 있도록
+    #   좌표 변환보다 먼저 저장
+    # ==========================================
+    if SAVE_FEATURE_MATCHES:
+        method_name = str(method).upper()
+        method_match_dir = os.path.join(
+            FEATURE_MATCH_DIR,
+            method_name,
+        )
+        os.makedirs(method_match_dir, exist_ok=True)
+
+        match_image = draw_matches(
+            ref_img,
+            kp1,
+            sce_img,
+            kp2,
+            good_matches,
+        )
+
+        safe_scene_name = os.path.basename(
+            sce_name or "scene"
+        )
+        output_path = os.path.join(
+            method_match_dir,
+            f"{safe_scene_name}_matches.png",
+        )
+
+        if cv2.imwrite(output_path, match_image):
+            logger.debug(
+                "특징점 매칭 이미지 저장: scene=%s, matches=%d, path=%s",
+                sce_name,
+                len(good_matches),
+                output_path,
+            )
+        else:
+            logger.warning(
+                "특징점 매칭 이미지 저장 실패: %s",
+                output_path,
+            )
 
     # ==========================================
     # 매칭 결과를 실제 이미지 좌표로 변환

@@ -1,8 +1,14 @@
 import time
 import cv2
 
-from logger import logger
-from object_finder import find_object
+from src.logger import logger
+from src.object_finder import find_object
+from src.settings import OBJECT_DETECTION_CONFIG
+
+
+MIN_TILE_WIDTH, MIN_TILE_HEIGHT = (
+    OBJECT_DETECTION_CONFIG["minimum_tile_size"]
+)
 
 # ==========================================
 # Fine 후보 우선순위 계산
@@ -86,10 +92,10 @@ def generate_fine_positions(
                 )
 
                 # 너무 작은 경계 Tile 제외
-                if (fine_x2 - fine_x) < 300:
+                if (fine_x2 - fine_x) < MIN_TILE_WIDTH:
                     continue
 
-                if (fine_y2 - fine_y) < 250:
+                if (fine_y2 - fine_y) < MIN_TILE_HEIGHT:
                     continue
 
                 # Coarse 단계에서 이미 검사한 위치는
@@ -353,7 +359,10 @@ def scan_coarse(
             y2 = min(y + tile_h, scene_h)
 
             # 너무 작은 마지막 경계 Tile은 제외
-            if (x2 - x) < 300 or (y2 - y) < 250:
+            if (
+                (x2 - x) < MIN_TILE_WIDTH
+                or (y2 - y) < MIN_TILE_HEIGHT
+            ):
                 continue
 
             # 실제로 검사하는 Coarse 위치 저장

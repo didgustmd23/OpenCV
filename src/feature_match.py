@@ -1,11 +1,15 @@
 # 라이브러리
 import cv2
 import numpy as np
-from logger import logger
+from src.logger import logger
+from src.project_paths import project_path
+from src.settings import MATCHING_CONFIG, MODEL_CONFIG
 
-ALIKED_PATH = "models/aliked-n32-top2k-1280.onnx"
-LIGHTGLUE_ONNX_PATH = "models/lightglue_for_aliked.onnx"
-DISK_PATH = "models/"
+ALIKED_PATH = str(project_path(MODEL_CONFIG["aliked_path"]))
+LIGHTGLUE_ONNX_PATH = str(
+    project_path(MODEL_CONFIG["lightglue_aliked_path"])
+)
+DISK_PATH = str(project_path(MODEL_CONFIG["disk_dir"]))
 
 # ==========================================
 # 특징점 검출 및 Descriptor 추출
@@ -38,12 +42,12 @@ def detect_features(image, method="SIFT"):
         params.inputSize = (1280, 1280)
         params.normalizeDescriptors = True
 
+        cv2.ocl.setUseOpenCL(False)
+        
         detector = cv2.ALIKED.create(
             ALIKED_PATH,
             params
         )
-        
-            
     elif method == "DISK":
         detector = cv2.DISK.create(DISK_PATH)
     else:
@@ -63,15 +67,41 @@ def detect_features(image, method="SIFT"):
 # - setPairInfo()에 Reference / Scene 크기 전달
 # ==========================================
 def match_features(des1, des2, kp1, kp2, ref_size, sce_size, method="SIFT"):
+    # Tile에 특징점이 없으면 Descriptor가 비어 있을 수 있다.
+    # 이 경우에는 해당 Tile을 매칭 실패로 처리하고 탐색을 계속한다.
+    if des1 is None or des2 is None:
+        logger.debug("Descriptor가 없어 매칭을 건너뜁니다: method=%s", method)
+        return []
+
+    if des1.ndim != 2 or des2.ndim != 2:
+        logger.warning(
+            "Descriptor 차원이 올바르지 않습니다: method=%s, ref=%s, scene=%s",
+            method,
+            des1.shape,
+            des2.shape,
+        )
+        return []
+
+    if len(des1) == 0 or len(des2) == 0 or des1.shape[1] != des2.shape[1]:
+        logger.debug(
+            "Descriptor 개수 또는 길이가 맞지 않아 매칭을 건너뜁니다: "
+            "method=%s, ref=%s, scene=%s",
+            method,
+            des1.shape,
+            des2.shape,
+        )
+        return []
     
     # =====================================
     # SIFT / ORB
     # =====================================
     if method == "SIFT":
         norm = cv2.NORM_L2
+        descriptor_type = np.float32
 
     elif method == "ORB":
         norm = cv2.NORM_HAMMING
+        descriptor_type = np.uint8
 
     # =====================================
     # ALIKED + LightGlue
@@ -125,6 +155,10 @@ def match_features(des1, des2, kp1, kp2, ref_size, sce_size, method="SIFT"):
             f"지원하지 않는 메소드: {method}"
         )
     
+    # BFMatcher는 두 Descriptor의 자료형이 같아야 한다.
+    des1 = np.ascontiguousarray(des1, dtype=descriptor_type)
+    des2 = np.ascontiguousarray(des2, dtype=descriptor_type)
+
     bf = cv2.BFMatcher(norm)
 
     # =====================================
@@ -147,7 +181,12 @@ def match_features(des1, des2, kp1, kp2, ref_size, sce_size, method="SIFT"):
 def ratio_test(matches, ratio=0.75):
     good_matches = []
 
-    for m, n in matches:
+    for match_pair in matches:
+        # train Descriptor가 하나뿐이면 두 번째 이웃이 없어 Ratio Test를 할 수 없다.
+        if len(match_pair) < 2:
+            continue
+
+        m, n = match_pair[:2]
         # m의 거리기 n*ratio 보다 작은지 비교 작다면 good_matches에 m추가
         # m의 거리가 n의 거리보다 최소 25% 작아야 한다
         if m.distance < ratio * n.distance:
@@ -188,7 +227,12 @@ def find_homography(pts1, pts2):
         return None, None
 
     # RANSAC를 사용하여 매칭 검사 pts1과 pts2의 점의 차이가 5픽셀 이내로 설정
-    H, mask = cv2.findHomography(pts1, pts2, cv2.RANSAC, 5.0)
+    H, mask = cv2.findHomography(
+        pts1,
+        pts2,
+        cv2.RANSAC,
+        MATCHING_CONFIG["ransac_reproj_threshold"],
+    )
 
     return H, mask
 

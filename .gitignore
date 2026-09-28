@@ -40,9 +40,19 @@ Thumbs.db
 *.tiff
 *.ico
 
+# Project data and generated results
+data/
+results/
+
 # Temporary
 *.tmp
 *.temp
 
 # Logs
 *.log
+
+# CSV
+*.csv
+
+# Txt
+*.txt
