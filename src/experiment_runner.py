@@ -748,6 +748,60 @@ def create_panorama_result_comparison_figure(
 
 
 # ==========================================
+# OpenCV 내장 Stitcher 결과 Figure 생성
+# - stitcher_create.py가 생성한 세트별 panorama.jpg를 표시
+# - 직접 구현한 방법별 결과와 시각적으로 비교할 때 사용
+# ==========================================
+def create_builtin_stitcher_result_figure(result_rows, pyplot):
+    if not result_rows:
+        raise ValueError("시각화할 OpenCV 내장 Stitcher 결과가 없습니다.")
+
+    figure, axes = pyplot.subplots(
+        1,
+        len(result_rows),
+        figsize=(7 * len(result_rows), 4),
+        constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
+
+    for axis, result in zip(axes, result_rows):
+        output_path = result.get("output_path")
+
+        if output_path is not None and Path(output_path).is_file():
+            axis.imshow(
+                read_image_for_display(
+                    output_path,
+                    max_width=900,
+                )
+            )
+        else:
+            axis.text(
+                0.5,
+                0.5,
+                "내장 Stitcher 파노라마가 생성되지 않았습니다.\n"
+                + result.get("note", ""),
+                ha="center",
+                va="center",
+                wrap=True,
+            )
+
+        axis.set_title(
+            f"{result['set']} / OpenCV Stitcher\n"
+            f"{result['elapsed']:.2f}초",
+            fontsize=11,
+        )
+        axis.set_xticks([])
+        axis.set_yticks([])
+
+    figure.suptitle(
+        "OpenCV 내장 Stitcher 파노라마 결과",
+        fontsize=16,
+    )
+
+    return figure
+
+
+# ==========================================
 # 객체 검출 정량 결과 공통 데이터 준비
 # - 조건·방법 조합별 요약 행을 빠르게 조회할 수 있도록 구성
 # ==========================================

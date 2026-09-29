@@ -19,6 +19,7 @@ src/                           # 프로젝트 실행 코드
 ├── pipeline.py                # 파노라마 합성 · 객체 검출 전체 실행
 ├── main.py                    # 개별 기능 테스트 · 디버그 실행
 ├── stitcher.py                # 파노라마 합성 핵심 기능
+├── stitcher_create.py         # OpenCV 내장 Stitcher 비교 실행
 ├── experiment_runner.py       # 일괄 실험·통계·노트북 시각화 도우미
 ├── feature_match.py           # 특징점 추출·매칭 공통 기능
 ├── object_finder.py           # 호모그래피 기반 객체 검출
@@ -41,6 +42,8 @@ results/
 │       ├── panorama.jpg
 │       ├── panorama_outline.jpg
 │       └── matching_stats.csv
+│   └── create/set01/           # OpenCV 내장 Stitcher 비교 결과
+│       └── panorama.jpg
 ├── object_detection/           # 객체 검출 결과와 실험 통계
 ├── matching/keypoint_matches/  # Coarse·Fine 타일 및 최종 후보 매칭 이미지
 ├── debug/                      # main.py 디버그 결과
