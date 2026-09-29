@@ -5,6 +5,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from src.image_io import resize_image
 from src.logger import logger
 from src.project_paths import MATCHING_RESULT_DIR
 from src.settings import MATCHING_CONFIG, OBJECT_DETECTION_CONFIG
@@ -593,6 +594,19 @@ def detect_object_in_panorama(
     tile_size = tuple(OBJECT_DETECTION_CONFIG["tile_size"])
     coarse_stride = tuple(OBJECT_DETECTION_CONFIG["coarse_stride"])
     fine_stride = tuple(OBJECT_DETECTION_CONFIG["fine_stride"])
+    detection_max_side = OBJECT_DETECTION_CONFIG[
+        "detection_max_side"
+    ]
+
+    # ==========================================
+    # 검출용 파노라마 축소
+    # - 타일 탐색은 축소 이미지에서 수행해 전체 검사 수를 줄임
+    # - 최종 Polygon과 Tile 좌표는 원본 파노라마 좌표로 복원
+    # ==========================================
+    detection_img, detection_scale = resize_image(
+        panorama_img,
+        max_side=detection_max_side,
+    )
 
     # ==========================================
     # 기준 물체 특징점 사전 계산
@@ -605,9 +619,13 @@ def detect_object_in_panorama(
     ref_features = (keypoints_ref, descriptors_ref)
 
     logger.info(
-        "객체 검출 시작: method=%s, reference_keypoints=%d",
+        "객체 검출 시작: method=%s, reference_keypoints=%d, "
+        "detection_size=%dx%d, scale=%.4f",
         method,
         len(keypoints_ref),
+        detection_img.shape[1],
+        detection_img.shape[0],
+        detection_scale,
     )
 
     # ==========================================
@@ -622,7 +640,7 @@ def detect_object_in_panorama(
     try:
         scan_result = scan_scene(
             ref_img=ref_img,
-            sce_img=panorama_img,
+            sce_img=detection_img,
             ref_features=ref_features,
             tile_size=tile_size,
             coarse_stride=coarse_stride,
@@ -641,6 +659,11 @@ def detect_object_in_panorama(
         "method": method,
         "is_detection": False,
         "reference_keypoints": len(keypoints_ref),
+        "detection_scale": detection_scale,
+        "detection_size": [
+            detection_img.shape[1],
+            detection_img.shape[0],
+        ],
         "coarse_checked": scan_result["stats"]["coarse_checked"],
         "fine_checked": scan_result["stats"]["fine_checked"],
         "elapsed": scan_result["stats"]["elapsed"],
@@ -654,11 +677,11 @@ def detect_object_in_panorama(
 
     best_result = best["result"]
     tile_x, tile_y = best["x"], best["y"]
-    scene_height, scene_width = panorama_img.shape[:2]
+    scene_height, scene_width = detection_img.shape[:2]
     tile_width, tile_height = tile_size
     tile_x2 = min(tile_x + tile_width, scene_width)
     tile_y2 = min(tile_y + tile_height, scene_height)
-    best_tile = panorama_img[tile_y:tile_y2, tile_x:tile_x2]
+    best_tile = detection_img[tile_y:tile_y2, tile_x:tile_x2]
 
     # ==========================================
     # 최종 후보 Tile 매칭 이미지 저장
@@ -697,7 +720,10 @@ def detect_object_in_panorama(
     ):
         record.update(
             {
-                "best_tile": [tile_x, tile_y],
+                "best_tile": [
+                    round(tile_x / detection_scale),
+                    round(tile_y / detection_scale),
+                ],
                 "best_match_count": best_result["match_count"],
                 "best_inlier_count": best_result["inlier_count"],
                 "best_inlier_ratio": best_result["inlier_ratio"],
@@ -721,7 +747,17 @@ def detect_object_in_panorama(
         H_tile=detection_result["H"],
         tile_origin=(tile_x, tile_y),
     )
-    corners_global = np.int32(np.round(corner_result["global"]))
+    corners_global = np.int32(
+        np.round(corner_result["global"] / detection_scale)
+    )
+
+    original_height, original_width = panorama_img.shape[:2]
+    original_tile = [
+        max(0, min(original_width, round(tile_x / detection_scale))),
+        max(0, min(original_height, round(tile_y / detection_scale))),
+        max(0, min(original_width, round(tile_x2 / detection_scale))),
+        max(0, min(original_height, round(tile_y2 / detection_scale))),
+    ]
 
     cv2.polylines(
         result_image,
@@ -735,7 +771,7 @@ def detect_object_in_panorama(
     record.update(
         {
             "is_detection": True,
-            "tile": [tile_x, tile_y, tile_x2, tile_y2],
+            "tile": original_tile,
             "match_count": detection_result["match_count"],
             "inlier_count": detection_result["inlier_count"],
             "inlier_ratio": detection_result["inlier_ratio"],

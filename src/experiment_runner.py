@@ -10,6 +10,7 @@ import numpy as np
 
 import src.object_finder as object_finder
 from src.feature_match import detect_features
+from src.image_io import resize_image
 from src.object_finder import get_global_corners
 from src.project_paths import (
     MATCHING_RESULT_DIR,
@@ -30,6 +31,7 @@ from src.tile_scanner import scan_scene
 @dataclass(frozen=True)
 class ExperimentSettings:
     panorama_max_side: int
+    detection_max_side: int
     methods: tuple
     tile_size: tuple
     coarse_stride: tuple
@@ -50,6 +52,9 @@ class ExperimentSettings:
 def get_experiment_settings():
     return ExperimentSettings(
         panorama_max_side=2048,
+        detection_max_side=OBJECT_DETECTION_CONFIG[
+            "detection_max_side"
+        ],
         methods=tuple(OBJECT_DETECTION_CONFIG["methods"]),
         tile_size=tuple(OBJECT_DETECTION_CONFIG["tile_size"]),
         coarse_stride=tuple(OBJECT_DETECTION_CONFIG["coarse_stride"]),
@@ -1160,6 +1165,7 @@ def detect_and_save(
     early_stop_inliers,
     result_root,
     matching_root,
+    detection_max_side,
 ):
     condition_name = condition["name"]
     save_visuals = condition.get(
@@ -1182,6 +1188,11 @@ def detect_and_save(
             f"파노라마 이미지를 불러올 수 없습니다: {scene_path}"
         )
 
+    detection_scene_img, detection_scale = resize_image(
+        scene_img,
+        max_side=detection_max_side,
+    )
+
     ref_img = transform_reference(
         ref_img,
         rotation_deg=condition.get("rotation_deg", 0.0),
@@ -1202,7 +1213,7 @@ def detect_and_save(
     try:
         scan_result = scan_scene(
             ref_img=ref_img,
-            sce_img=scene_img,
+            sce_img=detection_scene_img,
             ref_features=(kp_ref, des_ref),
             tile_size=tile_size,
             coarse_stride=coarse_stride,
@@ -1235,6 +1246,11 @@ def detect_and_save(
         "scale_factor": condition.get("scale_factor", 1.0),
         "brightness_factor": condition.get("brightness_factor", 1.0),
         "keypoints": len(kp_ref),
+        "detection_scale": detection_scale,
+        "detection_size": (
+            detection_scene_img.shape[1],
+            detection_scene_img.shape[0],
+        ),
         "elapsed": time.perf_counter() - start_time,
         "is_detection": False,
         "result_path": None,
@@ -1285,7 +1301,7 @@ def detect_and_save(
             tile_origin=(best["x"], best["y"]),
         )
         corners_global = np.int32(
-            np.round(corner_result["global"])
+            np.round(corner_result["global"] / detection_scale)
         )
 
         cv2.polylines(
@@ -1303,7 +1319,10 @@ def detect_and_save(
                 "match_count": best_result["match_count"],
                 "inlier_count": best_result["inlier_count"],
                 "inlier_ratio": best_result["inlier_ratio"],
-                "tile": (best["x"], best["y"]),
+                "tile": (
+                    round(best["x"] / detection_scale),
+                    round(best["y"] / detection_scale),
+                ),
             }
         )
 
@@ -1345,6 +1364,7 @@ def run_batch(
     early_stop_inliers,
     result_root,
     matching_root,
+    detection_max_side,
 ):
     records = []
 
@@ -1365,6 +1385,7 @@ def run_batch(
                     early_stop_inliers=early_stop_inliers,
                     result_root=result_root,
                     matching_root=matching_root,
+                    detection_max_side=detection_max_side,
                 )
                 records.append(record)
 

@@ -132,6 +132,7 @@ results/object_detection/{입력 폴더명}/{METHOD}/pipeline_summary.json
 | --- | --- |
 | `is_detection` | 최종 객체 검출 성공 여부 |
 | `reference_keypoints` | 기준 물체에서 검출된 특징점 수 |
+| `detection_scale`, `detection_size` | 객체 탐색에 사용한 축소 배율과 축소 파노라마 크기 |
 | `coarse_checked`, `fine_checked` | 넓은 탐색과 세밀 탐색에서 검사한 타일 수 |
 | `elapsed` | 객체 탐색에 걸린 시간(초) |
 | `result_path` | 초록색 객체 Polygon이 표시된 검출 결과 이미지 경로 |
@@ -161,6 +162,7 @@ results/object_detection/metrics/method_condition_summary.csv
 | `condition` | `baseline`, `rotation_plus30`, `scale_075`, `brightness_070` 등 변형 조건 |
 | `method` | SIFT, ORB, ALIKED |
 | `rotation_deg`, `scale_factor`, `brightness_factor` | 기준 물체 이미지에 적용한 회전각, 크기, 밝기 배율 |
+| `detection_scale`, `detection_size` | 탐색에 사용한 축소 파노라마의 배율과 크기 |
 | `is_detection` | 해당 조건에서 객체 검출 성공 여부 |
 | `keypoints`, `match_count`, `inlier_count`, `inlier_ratio` | 특징점 수와 매칭 품질 지표 |
 | `elapsed` | 해당 케이스의 탐색 시간(초) |
@@ -190,7 +192,7 @@ results/object_detection/metrics/method_condition_summary.csv
 - `paths`: 데이터·모델·결과물 폴더
 - `models`: ALIKED·LightGlue 모델 파일 경로
 - `matching`: Lowe Ratio Test, RANSAC, 최소 Inlier 수
-- `object_detection`: 타일 크기·간격·조기 종료 기준
+- `object_detection`: 검출용 파노라마 최대 변, 타일 크기·간격·조기 종료 기준
 - `panorama`: 파노라마 비율 검사·RANSAC·입력 축소·캔버스 제한
 - `pipeline`: pipeline.py의 기본 연속 사진·기준 물체 입력 경로
 - `logging`: Python·OpenCV 로그 수준

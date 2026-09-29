@@ -44,22 +44,16 @@ def list_image_files(directory):
 
 
 # ==========================================
-# 이미지 읽기
-# - np.fromfile + cv2.imdecode를 사용해 한글 경로도 지원
+# 이미지 크기 축소
 # - max_side가 지정되면 긴 변 기준으로만 축소
+# - 축소 이미지와 원본 사이의 좌표 변환용 배율을 함께 반환
 # ==========================================
-def read_image(path, max_side=None):
-    path = project_path(path)
-    encoded = np.fromfile(str(path), dtype=np.uint8)
-    image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-
-    if image is None:
-        raise ValueError(
-            f"이미지를 불러올 수 없습니다: {path}"
-        )
+def resize_image(image, max_side=None):
+    if image is None or image.size == 0:
+        raise ValueError("축소할 이미지가 비어 있습니다.")
 
     if max_side is None:
-        return image
+        return image, 1.0
 
     if max_side <= 0:
         raise ValueError("max_side는 0보다 커야 합니다.")
@@ -77,6 +71,25 @@ def read_image(path, max_side=None):
             interpolation=cv2.INTER_AREA,
         )
 
+    return image, scale
+
+
+# ==========================================
+# 이미지 읽기
+# - np.fromfile + cv2.imdecode를 사용해 한글 경로도 지원
+# - max_side가 지정되면 긴 변 기준으로만 축소
+# ==========================================
+def read_image(path, max_side=None):
+    path = project_path(path)
+    encoded = np.fromfile(str(path), dtype=np.uint8)
+    image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+
+    if image is None:
+        raise ValueError(
+            f"이미지를 불러올 수 없습니다: {path}"
+        )
+
+    image, _ = resize_image(image, max_side=max_side)
     return image
 
 

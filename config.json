@@ -24,6 +24,7 @@
   "object_detection": {
     "methods": ["SIFT", "ORB", "ALIKED"],
     "default_method": "SIFT",
+    "detection_max_side": 3072,
     "tile_size": [512, 512],
     "coarse_stride": [512, 512],
     "fine_stride": [256, 256],
