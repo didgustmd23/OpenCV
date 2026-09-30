@@ -154,7 +154,7 @@ results/object_detection/{입력 폴더명}/{METHOD}/pipeline_summary.json
 | `method` | 실행한 특징점 방법(SIFT, ORB, ALIKED) |
 | `panorama_path` | 생성된 파노라마 이미지 경로 |
 | `panorama_outline_path` | 파노라마 외곽선 확인 이미지 경로 |
-| `panorama_matching_stats` | 인접 사진끼리의 원시·필터링·RANSAC 매칭 수 CSV 경로 |
+| `panorama_matching_stats` | 인접 사진끼리의 비율 검사 전·후·RANSAC 매칭 수 CSV 경로 |
 | `panorama_export_path` | `--export`를 지정했을 때 추가 저장한 파노라마 경로. 미지정 시 `null` |
 | `detection` | Coarse-to-Fine 객체 탐색 결과 |
 

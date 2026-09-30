@@ -25,7 +25,7 @@ def create_panorama_summary_figure(summary_rows, pyplot):
         ]
         for row in summary_rows
     ]
-    figure, axis = pyplot.subplots(figsize=(12, max(3, 0.5 * len(table_rows) + 1.5)))
+    figure, axis = pyplot.subplots(figsize=(15, max(3, 0.5 * len(table_rows) + 1.5)))
     axis.axis("off")
     table = axis.table(
         cellText=table_rows,
@@ -33,10 +33,10 @@ def create_panorama_summary_figure(summary_rows, pyplot):
             "세트",
             "방법",
             "사진 쌍",
-            "평균 원시 매칭",
-            "평균 필터링 매칭",
-            "평균 Inlier",
-            "평균 Inlier 비율",
+            "평균 검사 전 매칭 수",
+            "평균 검사 후 매칭 수",
+            "평균 RANSAC Inlier 수",
+            "평균 RANSAC Inlier 비율",
         ],
         cellLoc="center",
         loc="center",
