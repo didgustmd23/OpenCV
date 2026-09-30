@@ -1,14 +1,98 @@
 import time
+
 import cv2
+import numpy as np
 
-from src.logger import logger
-from src.object_finder import find_object
-from src.settings import OBJECT_DETECTION_CONFIG
+from src.common.logger import logger
+from src.common.settings import OBJECT_DETECTION_CONFIG
+
+MIN_TILE_WIDTH, MIN_TILE_HEIGHT = OBJECT_DETECTION_CONFIG["minimum_tile_size"]
+BLACK_PIXEL_THRESHOLD = OBJECT_DETECTION_CONFIG["black_pixel_threshold"]
+MAX_BLACK_TILE_RATIO = OBJECT_DETECTION_CONFIG["max_black_tile_ratio"]
 
 
-MIN_TILE_WIDTH, MIN_TILE_HEIGHT = (
-    OBJECT_DETECTION_CONFIG["minimum_tile_size"]
-)
+# ==========================================
+# 검은 캔버스 영역 비율 계산
+# - 직접 파노라마 합성의 빈 영역은 거의 검은 픽셀로 남음
+# - 실제 영상 정보가 거의 없는 Tile만 탐색 대상에서 제외
+# ==========================================
+def get_black_pixel_ratio(tile):
+    if tile.size == 0:
+        return 1.0
+
+    if tile.ndim == 2:
+        black_pixels = tile <= BLACK_PIXEL_THRESHOLD
+    else:
+        black_pixels = np.all(
+            tile <= BLACK_PIXEL_THRESHOLD,
+            axis=2,
+        )
+
+    return float(np.mean(black_pixels))
+
+
+# ==========================================
+# 검은 캔버스 Tile 제외 여부 판단
+# - 기본값은 70% 이상이 검은 픽셀인 경우만 제외
+# - 야간·어두운 장면의 정보가 과도하게 사라지는 것을 방지
+# ==========================================
+def should_skip_black_tile(tile):
+    black_ratio = get_black_pixel_ratio(tile)
+
+    return (
+        black_ratio >= MAX_BLACK_TILE_RATIO,
+        black_ratio,
+    )
+
+
+# ==========================================
+# Tile 하나의 객체 검출 실행
+# - Coarse·Fine 단계가 공통으로 사용하는 예외 처리
+# - 실제 특징점·RANSAC 구현은 tile_detector callback에 위임
+# ==========================================
+def detect_in_tile(
+    tile_detector,
+    ref_img,
+    tile,
+    *,
+    stage,
+    tile_index,
+    x,
+    y,
+    method,
+    ref_name,
+    ref_features,
+):
+    """Tile 하나에서 객체 검출을 실행하고 실패 시 None을 반환한다."""
+    try:
+        return tile_detector(
+            ref_img,
+            tile,
+            method=method,
+            ref_name=ref_name,
+            sce_name=f"{stage.lower()}_{tile_index}",
+            ref_features=ref_features,
+            coarse_mode=True,
+        )
+    except cv2.error as error:
+        logger.warning(
+            "%s Tile OpenCV 오류: tile=%d, xy=(%d, %d), error=%s",
+            stage,
+            tile_index,
+            x,
+            y,
+            error,
+        )
+    except Exception:
+        logger.exception(
+            "%s Tile 처리 중 예외 발생: tile=%d, xy=(%d, %d)",
+            stage,
+            tile_index,
+            x,
+            y,
+        )
+    return None
+
 
 # ==========================================
 # Fine 후보 우선순위 계산
@@ -33,8 +117,7 @@ def get_fine_priority(
 
         distance = dx + dy
 
-        if distance < best_distance:
-            best_distance = distance
+        best_distance = min(best_distance, distance)
 
     return best_distance
 
@@ -69,7 +152,6 @@ def generate_fine_positions(
         # 주변 3 x 3 위치에 Fine 후보 생성
         for dy in (-stride_y, 0, stride_y):
             for dx in (-stride_x, 0, stride_x):
-
                 fine_x = center_x + dx
                 fine_y = center_y + dy
 
@@ -104,9 +186,7 @@ def generate_fine_positions(
                     continue
 
                 # set을 사용하여 중복 좌표 자동 제거
-                fine_positions.add(
-                    (fine_x, fine_y)
-                )
+                fine_positions.add((fine_x, fine_y))
 
     # Fine 후보 탐색 순서 결정
     #
@@ -125,7 +205,7 @@ def generate_fine_positions(
             ),
             p[1],
             p[0],
-        )
+        ),
     )
 
     return fine_positions
@@ -145,6 +225,7 @@ def scan_fine(
     fine_positions,
     tile_size,
     ref_features,
+    tile_detector,
     early_stop_inliers,
     ref_name,
     method="ALIKED",
@@ -156,6 +237,7 @@ def scan_fine(
     fine_results = []
 
     fine_checked_count = 0
+    fine_skipped_black_count = 0
     early_stopped = False
 
     fine_start = time.time()
@@ -174,6 +256,20 @@ def scan_fine(
 
         tile = sce_img[y:y2, x:x2]
 
+        skip_black_tile, black_ratio = should_skip_black_tile(tile)
+
+        if skip_black_tile:
+            fine_skipped_black_count += 1
+
+            logger.debug(
+                "Fine Tile 검은 영역 제외: tile=%d, xy=(%d, %d), black_ratio=%.3f",
+                fine_index,
+                x,
+                y,
+                black_ratio,
+            )
+            continue
+
         fine_checked_count += 1
 
         logger.debug(
@@ -185,37 +281,18 @@ def scan_fine(
             y2 - y,
         )
 
-        try:
-            result = find_object(
-                ref_img,
-                tile,
-                method=method,
-                ref_name=ref_name,
-                sce_name=f"fine_{fine_index}",
-                ref_features=ref_features,
-                coarse_mode=True,
-            )
-
-        except cv2.error as e:
-            logger.warning(
-                "Fine Tile OpenCV 오류: "
-                "tile=%d, xy=(%d, %d), error=%s",
-                fine_index,
-                x,
-                y,
-                e,
-            )
-            continue
-
-        except Exception:
-            logger.exception(
-                "Fine Tile 처리 중 예외 발생: "
-                "tile=%d, xy=(%d, %d)",
-                fine_index,
-                x,
-                y,
-            )
-            continue
+        result = detect_in_tile(
+            tile_detector,
+            ref_img,
+            tile,
+            stage="Fine",
+            tile_index=fine_index,
+            x=x,
+            y=y,
+            method=method,
+            ref_name=ref_name,
+            ref_features=ref_features,
+        )
 
         if result is None:
             logger.debug(
@@ -250,15 +327,11 @@ def scan_fine(
 
         # 충분히 강한 검출 결과가 나오면
         # 남은 Fine Tile을 검사하지 않고 종료
-        if (
-            result["is_detection"]
-            and result["inlier_count"] >= early_stop_inliers
-        ):
+        if result["is_detection"] and result["inlier_count"] >= early_stop_inliers:
             early_stopped = True
 
             logger.info(
-                "Fine Early Stop: xy=(%d, %d), "
-                "matches=%d, inliers=%d, ratio=%.3f",
+                "Fine Early Stop: xy=(%d, %d), matches=%d, inliers=%d, ratio=%.3f",
                 x,
                 y,
                 result["match_count"],
@@ -271,9 +344,10 @@ def scan_fine(
     fine_elapsed = time.time() - fine_start
 
     logger.info(
-        "Fine 탐색 완료: checked=%d, valid=%d, "
+        "Fine 탐색 완료: checked=%d, skipped_black=%d, valid=%d, "
         "elapsed=%.2fs, early_stop=%s",
         fine_checked_count,
+        fine_skipped_black_count,
         len(fine_results),
         fine_elapsed,
         early_stopped,
@@ -301,9 +375,7 @@ def scan_fine(
         best_result = best_fine["result"]
 
         logger.info(
-            "Fine BEST: "
-            "tile=%d, xy=(%d, %d), "
-            "matches=%d, inliers=%d, ratio=%.3f",
+            "Fine BEST: tile=%d, xy=(%d, %d), matches=%d, inliers=%d, ratio=%.3f",
             best_fine["index"],
             best_fine["x"],
             best_fine["y"],
@@ -316,10 +388,12 @@ def scan_fine(
         "results": fine_results,
         "best": best_fine,
         "checked_count": fine_checked_count,
+        "skipped_black_count": fine_skipped_black_count,
         "early_stopped": early_stopped,
         "elapsed": fine_elapsed,
     }
-    
+
+
 # ==========================================
 # Coarse Tile 탐색
 # - Scene 전체를 Coarse 간격으로 탐색
@@ -334,6 +408,7 @@ def scan_coarse(
     tile_size,
     coarse_stride,
     ref_features,
+    tile_detector,
     ref_name,
     top_k,
     method="ALIKED",
@@ -347,6 +422,7 @@ def scan_coarse(
     coarse_positions = set()
 
     coarse_index = 0
+    coarse_skipped_black_count = 0
 
     coarse_start = time.perf_counter()
 
@@ -354,15 +430,11 @@ def scan_coarse(
 
     for y in range(0, scene_h, stride_y):
         for x in range(0, scene_w, stride_x):
-
             x2 = min(x + tile_w, scene_w)
             y2 = min(y + tile_h, scene_h)
 
             # 너무 작은 마지막 경계 Tile은 제외
-            if (
-                (x2 - x) < MIN_TILE_WIDTH
-                or (y2 - y) < MIN_TILE_HEIGHT
-            ):
+            if (x2 - x) < MIN_TILE_WIDTH or (y2 - y) < MIN_TILE_HEIGHT:
                 continue
 
             # 실제로 검사하는 Coarse 위치 저장
@@ -371,11 +443,23 @@ def scan_coarse(
 
             tile = sce_img[y:y2, x:x2]
 
+            skip_black_tile, black_ratio = should_skip_black_tile(tile)
+
+            if skip_black_tile:
+                coarse_skipped_black_count += 1
+
+                logger.debug(
+                    "Coarse Tile 검은 영역 제외: xy=(%d, %d), black_ratio=%.3f",
+                    x,
+                    y,
+                    black_ratio,
+                )
+                continue
+
             coarse_index += 1
 
             logger.debug(
-                "Coarse Tile 시작: "
-                "tile=%d, xy=(%d, %d), size=(%d, %d)",
+                "Coarse Tile 시작: tile=%d, xy=(%d, %d), size=(%d, %d)",
                 coarse_index,
                 x,
                 y,
@@ -383,44 +467,24 @@ def scan_coarse(
                 y2 - y,
             )
 
-            try:
-                result = find_object(
-                    ref_img,
-                    tile,
-                    method=method,
-                    ref_name=ref_name,
-                    sce_name=f"coarse_{coarse_index}",
-                    ref_features=ref_features,
-                    coarse_mode=True,
-                )
-
-            except cv2.error as e:
-                logger.warning(
-                    "Coarse Tile OpenCV 오류: "
-                    "tile=%d, xy=(%d, %d), error=%s",
-                    coarse_index,
-                    x,
-                    y,
-                    e,
-                )
-                continue
-
-            except Exception:
-                logger.exception(
-                    "Coarse Tile 처리 중 예외 발생: "
-                    "tile=%d, xy=(%d, %d)",
-                    coarse_index,
-                    x,
-                    y,
-                )
-                continue
+            result = detect_in_tile(
+                tile_detector,
+                ref_img,
+                tile,
+                stage="Coarse",
+                tile_index=coarse_index,
+                x=x,
+                y=y,
+                method=method,
+                ref_name=ref_name,
+                ref_features=ref_features,
+            )
 
             # 특징점 부족, Homography 실패 등으로
             # 결과 자체가 생성되지 않은 경우
             if result is None:
                 logger.debug(
-                    "Coarse 결과 없음: "
-                    "tile=%d, xy=(%d, %d)",
+                    "Coarse 결과 없음: tile=%d, xy=(%d, %d)",
                     coarse_index,
                     x,
                     y,
@@ -462,8 +526,9 @@ def scan_coarse(
     coarse_elapsed = time.perf_counter() - coarse_start
 
     logger.info(
-        "Coarse 탐색 완료: checked=%d, valid=%d, elapsed=%.2fs",
+        "Coarse 탐색 완료: checked=%d, skipped_black=%d, valid=%d, elapsed=%.2fs",
         coarse_index,
+        coarse_skipped_black_count,
         len(coarse_candidates),
         coarse_elapsed,
     )
@@ -508,8 +573,10 @@ def scan_coarse(
         "top_candidates": top_coarse_candidates,
         "positions": coarse_positions,
         "checked_count": coarse_index,
+        "skipped_black_count": coarse_skipped_black_count,
         "elapsed": coarse_elapsed,
     }
+
 
 # ==========================================
 # Scene 전체 Coarse-to-Fine 탐색
@@ -523,6 +590,7 @@ def scan_scene(
     ref_img,
     sce_img,
     ref_features,
+    tile_detector,
     tile_size,
     coarse_stride,
     fine_stride,
@@ -536,8 +604,7 @@ def scan_scene(
     scene_h, scene_w = sce_img.shape[:2]
 
     logger.info(
-        "Scene 탐색 시작: "
-        "scene_size=(%d, %d), tile_size=%s",
+        "Scene 탐색 시작: scene_size=(%d, %d), tile_size=%s",
         scene_w,
         scene_h,
         tile_size,
@@ -553,6 +620,7 @@ def scan_scene(
         tile_size=tile_size,
         coarse_stride=coarse_stride,
         ref_features=ref_features,
+        tile_detector=tile_detector,
         ref_name=ref_name,
         top_k=coarse_top_k,
         method=method,
@@ -567,9 +635,7 @@ def scan_scene(
     if not coarse_candidates:
         scan_elapsed = time.perf_counter() - scan_start
 
-        logger.warning(
-            "Coarse 후보를 찾지 못했습니다."
-        )
+        logger.warning("Coarse 후보를 찾지 못했습니다.")
 
         return {
             "best": None,
@@ -578,8 +644,11 @@ def scan_scene(
             "fine_positions": [],
             "stats": {
                 "coarse_checked": coarse_scan["checked_count"],
+                "coarse_skipped_black": coarse_scan["skipped_black_count"],
                 "fine_checked": 0,
+                "fine_skipped_black": 0,
                 "total_checked": coarse_scan["checked_count"],
+                "total_skipped_black": coarse_scan["skipped_black_count"],
                 "early_stopped": False,
                 "elapsed": scan_elapsed,
             },
@@ -612,6 +681,7 @@ def scan_scene(
         fine_positions=fine_positions,
         tile_size=tile_size,
         ref_features=ref_features,
+        tile_detector=tile_detector,
         early_stop_inliers=early_stop_inliers,
         ref_name=ref_name,
         method=method,
@@ -622,19 +692,23 @@ def scan_scene(
     # ==========================================
 
     coarse_checked = coarse_scan["checked_count"]
+    coarse_skipped_black = coarse_scan["skipped_black_count"]
     fine_checked = fine_scan["checked_count"]
+    fine_skipped_black = fine_scan["skipped_black_count"]
 
     total_checked = coarse_checked + fine_checked
+    total_skipped_black = coarse_skipped_black + fine_skipped_black
 
     scan_elapsed = time.perf_counter() - scan_start
 
     logger.info(
         "전체 탐색 완료: "
-        "coarse=%d, fine=%d, total=%d, "
+        "coarse=%d, fine=%d, total=%d, skipped_black=%d, "
         "early_stop=%s, elapsed=%.2fs",
         coarse_checked,
         fine_checked,
         total_checked,
+        total_skipped_black,
         fine_scan["early_stopped"],
         scan_elapsed,
     )
@@ -646,8 +720,11 @@ def scan_scene(
         "fine_positions": fine_positions,
         "stats": {
             "coarse_checked": coarse_checked,
+            "coarse_skipped_black": coarse_skipped_black,
             "fine_checked": fine_checked,
+            "fine_skipped_black": fine_skipped_black,
             "total_checked": total_checked,
+            "total_skipped_black": total_skipped_black,
             "early_stopped": fine_scan["early_stopped"],
             "elapsed": scan_elapsed,
         },

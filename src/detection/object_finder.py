@@ -1,34 +1,31 @@
-# 라이브러리 추가
-import os
+import time
+from functools import partial
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from src.image_io import resize_image
-from src.logger import logger
-from src.project_paths import MATCHING_RESULT_DIR
-from src.settings import MATCHING_CONFIG, OBJECT_DETECTION_CONFIG
-from src.feature_match import (
+from src.common.feature_match import (
     detect_features,
+    draw_matches,
+    find_homography,
+    get_matched_points,
     match_features,
     ratio_test,
-    get_matched_points,
-    find_homography,
-    draw_matches,
 )
-
+from src.common.image_io import resize_image
+from src.common.logger import logger
+from src.common.project_paths import MATCHING_RESULT_DIR
+from src.common.settings import MATCHING_CONFIG, OBJECT_DETECTION_CONFIG
 
 # 객체 검출로 인정하기 위한 최소 RANSAC Inlier 개수
 MIN_INLIERS = MATCHING_CONFIG["min_inliers"]
 LOWE_RATIO = MATCHING_CONFIG["lowe_ratio"]
 
-# Homography 계산 전 Tile 특징점 매칭 결과 저장 설정
-SAVE_FEATURE_MATCHES = OBJECT_DETECTION_CONFIG["save_feature_matches"]
-
-# 최종 선택 Tile의 final_matches.png 저장 설정
-SAVE_FINAL_MATCHES = OBJECT_DETECTION_CONFIG["save_final_matches"]
-FEATURE_MATCH_DIR = str(MATCHING_RESULT_DIR)
+# 매칭 이미지 저장 기본값
+# - 실행마다 전역값을 바꾸지 않고 find_object() 인자로 전달한다.
+DEFAULT_SAVE_FEATURE_MATCHES = OBJECT_DETECTION_CONFIG["save_feature_matches"]
+DEFAULT_SAVE_FINAL_MATCHES = OBJECT_DETECTION_CONFIG["save_final_matches"]
 
 
 # ==========================================
@@ -57,9 +54,19 @@ def find_object(
     sce_name="",
     ref_features=None,
     coarse_mode=False,
+    feature_match_dir=None,
+    save_feature_matches=None,
 ):
-
     logger.debug("Object Detection - find_object() - Start")
+
+    # 매칭 이미지 저장 설정은 호출마다 독립적으로 결정한다.
+    # 전역값을 변경하지 않아 일괄 실행·병렬 실행에서도 설정이 섞이지 않는다.
+    feature_match_dir = Path(feature_match_dir or MATCHING_RESULT_DIR)
+    save_feature_matches = (
+        DEFAULT_SAVE_FEATURE_MATCHES
+        if save_feature_matches is None
+        else bool(save_feature_matches)
+    )
 
     # ==========================================
     # Reference 특징점 및 Descriptor 준비
@@ -70,10 +77,7 @@ def find_object(
     if ref_features is None:
         logger.debug("Reference 특징점 새로 계산")
 
-        kp1, des1 = detect_features(
-            ref_img,
-            method
-        )
+        kp1, des1 = detect_features(ref_img, method)
     else:
         logger.debug("Reference 특징점 재사용")
         kp1, des1 = ref_features
@@ -85,12 +89,11 @@ def find_object(
     # ==========================================
     logger.debug("Scene 특징점 새로 계산")
 
-    kp2, des2 = detect_features(
-        sce_img,
-        method
-    )
+    kp2, des2 = detect_features(sce_img, method)
 
-    logger.debug("method %s: Reference Image: %s Scene Image: %s", method, ref_name, sce_name)
+    logger.debug(
+        "method %s: Reference Image: %s Scene Image: %s", method, ref_name, sce_name
+    )
     logger.debug(f"reference keypoint: {len(kp1)}")
     logger.debug(f"scene keypoint: {len(kp2)}")
 
@@ -140,13 +143,10 @@ def find_object(
     # - Homography 계산에 실패하더라도 매칭 상태를 확인할 수 있도록
     #   좌표 변환보다 먼저 저장
     # ==========================================
-    if SAVE_FEATURE_MATCHES:
+    if save_feature_matches:
         method_name = str(method).upper()
-        method_match_dir = os.path.join(
-            FEATURE_MATCH_DIR,
-            method_name,
-        )
-        os.makedirs(method_match_dir, exist_ok=True)
+        method_match_dir = feature_match_dir / method_name
+        method_match_dir.mkdir(parents=True, exist_ok=True)
 
         match_image = draw_matches(
             ref_img,
@@ -156,15 +156,10 @@ def find_object(
             good_matches,
         )
 
-        safe_scene_name = os.path.basename(
-            sce_name or "scene"
-        )
-        output_path = os.path.join(
-            method_match_dir,
-            f"{safe_scene_name}_matches.png",
-        )
+        safe_scene_name = Path(sce_name or "scene").name
+        output_path = method_match_dir / f"{safe_scene_name}_matches.png"
 
-        if cv2.imwrite(output_path, match_image):
+        if cv2.imwrite(str(output_path), match_image):
             logger.debug(
                 "특징점 매칭 이미지 저장: scene=%s, matches=%d, path=%s",
                 sce_name,
@@ -198,9 +193,7 @@ def find_object(
     # - 4개 미만이면 객체 위치 변환이 불가능하므로 종료
     # ==========================================
     if len(pts1) < 4 or len(pts2) < 4:
-        logger.debug(
-            "대응 점이 4개 미만라 계산이 불가합니다."
-        )
+        logger.debug("대응 점이 4개 미만라 계산이 불가합니다.")
         return None
 
     # ==========================================
@@ -228,11 +221,7 @@ def find_object(
     # ==========================================
     inlier_count = int(mask.sum())
 
-    inlier_ratio = (
-        inlier_count / match_count
-        if match_count > 0
-        else 0.0
-    )
+    inlier_ratio = inlier_count / match_count if match_count > 0 else 0.0
 
     logger.debug(
         "RANSAC 결과: matches=%d, inliers=%d, ratio=%.3f",
@@ -249,7 +238,6 @@ def find_object(
     #   사용할 수 있도록 통계 정보만 반환
     # ==========================================
     if inlier_count < MIN_INLIERS:
-
         logger.debug(
             "RANSAC inlier 부족: inliers=%d, min_required=%d",
             inlier_count,
@@ -273,12 +261,14 @@ def find_object(
     # ==========================================
     h, w = ref_img.shape[:2]
 
-    corners = np.float32([
-        [0, 0],     # 왼쪽 위
-        [w, 0],     # 오른쪽 위
-        [w, h],     # 오른쪽 아래
-        [0, h],     # 왼쪽 아래
-    ]).reshape(-1, 1, 2)
+    corners = np.float32(
+        [
+            [0, 0],  # 왼쪽 위
+            [w, 0],  # 오른쪽 위
+            [w, h],  # 오른쪽 아래
+            [0, h],  # 왼쪽 아래
+        ]
+    ).reshape(-1, 1, 2)
 
     # ==========================================
     # Reference 모서리를 Scene 좌표로 변환
@@ -344,17 +334,9 @@ def find_object(
     # ==========================================
     ref_area = float(w * h)
 
-    detected_area = abs(
-        cv2.contourArea(
-            transformed_corners.astype(np.float32)
-        )
-    )
+    detected_area = abs(cv2.contourArea(transformed_corners.astype(np.float32)))
 
-    area_ratio = (
-        detected_area / ref_area
-        if ref_area > 0
-        else 0.0
-    )
+    area_ratio = detected_area / ref_area if ref_area > 0 else 0.0
 
     # ==========================================
     # 검출 사각형의 기하학적 형태 분석
@@ -364,38 +346,24 @@ def find_object(
     # ==========================================
     quad = transformed_corners.reshape(4, 2)
 
-    is_convex = cv2.isContourConvex(
-        quad.astype(np.float32)
-    )
+    is_convex = cv2.isContourConvex(quad.astype(np.float32))
 
     logger.debug(
         "Convex quadrilateral: %s",
         is_convex,
     )
 
-    top = np.linalg.norm(
-        quad[1] - quad[0]
-    )
-    right = np.linalg.norm(
-        quad[2] - quad[1]
-    )
-    bottom = np.linalg.norm(
-        quad[2] - quad[3]
-    )
-    left = np.linalg.norm(
-        quad[3] - quad[0]
-    )
+    top = np.linalg.norm(quad[1] - quad[0])
+    right = np.linalg.norm(quad[2] - quad[1])
+    bottom = np.linalg.norm(quad[2] - quad[3])
+    left = np.linalg.norm(quad[3] - quad[0])
 
     horizontal_ratio = (
-        min(top, bottom) / max(top, bottom)
-        if max(top, bottom) > 0
-        else 0.0
+        min(top, bottom) / max(top, bottom) if max(top, bottom) > 0 else 0.0
     )
 
     vertical_ratio = (
-        min(left, right) / max(left, right)
-        if max(left, right) > 0
-        else 0.0
+        min(left, right) / max(left, right) if max(left, right) > 0 else 0.0
     )
 
     logger.debug(
@@ -433,9 +401,7 @@ def find_object(
     # - 네 모서리가 뒤집히거나 교차한 경우 검출 실패 처리
     # ==========================================
     if not is_convex:
-        logger.debug(
-            "Homography polygon이 convex하지 않아 객체 검출 실패"
-        )
+        logger.debug("Homography polygon이 convex하지 않아 객체 검출 실패")
         return None
 
     # ==========================================
@@ -459,9 +425,7 @@ def find_object(
         3,
     )
 
-    logger.debug(
-        "Object Detection - find_object() - END"
-    )
+    logger.debug("Object Detection - find_object() - END")
 
     # ==========================================
     # 객체 검출 결과 반환
@@ -513,12 +477,14 @@ def get_global_corners(
     # ==========================================
     ref_h, ref_w = ref_img.shape[:2]
 
-    ref_corners = np.float32([
-        [0, 0],
-        [ref_w, 0],
-        [ref_w, ref_h],
-        [0, ref_h],
-    ]).reshape(-1, 1, 2)
+    ref_corners = np.float32(
+        [
+            [0, 0],
+            [ref_w, 0],
+            [ref_w, ref_h],
+            [0, ref_h],
+        ]
+    ).reshape(-1, 1, 2)
 
     # ==========================================
     # Reference → BEST Tile 좌표 변환
@@ -572,46 +538,66 @@ def get_global_corners(
 
 
 # ==========================================
-# 파노라마에서 기준 물체 검출
-# - 기준 물체 특징점은 한 번만 추출한 뒤 모든 Tile 탐색에 재사용
-# - Coarse-to-Fine 탐색으로 최종 후보 Tile을 선택
-# - 최종 Homography를 전체 파노라마 좌표로 변환해 Polygon 표시
+# 객체 검출 공통 Tile 탐색 실행
+# - 파이프라인과 일괄 실험이 함께 사용하는 특징점 추출·축소·탐색 기능
+# - 호출자는 기준 물체 변형과 결과 파일 저장만 담당
 # ==========================================
-def detect_object_in_panorama(
+def run_object_detection_scan(
     ref_img,
     panorama_img,
     reference_path,
     method,
-    output_dir,
+    *,
+    tile_size=None,
+    coarse_stride=None,
+    fine_stride=None,
+    coarse_top_k=None,
+    early_stop_inliers=None,
+    detection_max_side=None,
+    feature_match_dir=None,
+    save_feature_matches=None,
 ):
-    global FEATURE_MATCH_DIR, SAVE_FEATURE_MATCHES
-
-    # tile_scanner.py가 find_object()를 사용하므로 순환 import를 피하기 위해
-    # 전체 파노라마 검출을 시작하는 시점에만 불러온다.
-    from src.tile_scanner import scan_scene
+    # Tile Scanner는 검출 구현을 직접 import하지 않고, 아래 callback으로
+    # Tile 평가 기능을 전달받는다. 이 방식으로 순환 import를 제거한다.
+    from src.detection.tile_scanner import scan_scene
 
     method = str(method).upper()
-    tile_size = tuple(OBJECT_DETECTION_CONFIG["tile_size"])
-    coarse_stride = tuple(OBJECT_DETECTION_CONFIG["coarse_stride"])
-    fine_stride = tuple(OBJECT_DETECTION_CONFIG["fine_stride"])
-    detection_max_side = OBJECT_DETECTION_CONFIG[
-        "detection_max_side"
-    ]
+    tile_size = (
+        tuple(tile_size)
+        if tile_size is not None
+        else tuple(OBJECT_DETECTION_CONFIG["tile_size"])
+    )
+    coarse_stride = (
+        tuple(coarse_stride)
+        if coarse_stride is not None
+        else tuple(OBJECT_DETECTION_CONFIG["coarse_stride"])
+    )
+    fine_stride = (
+        tuple(fine_stride)
+        if fine_stride is not None
+        else tuple(OBJECT_DETECTION_CONFIG["fine_stride"])
+    )
+    coarse_top_k = (
+        coarse_top_k
+        if coarse_top_k is not None
+        else OBJECT_DETECTION_CONFIG["coarse_top_k"]
+    )
+    early_stop_inliers = (
+        early_stop_inliers
+        if early_stop_inliers is not None
+        else OBJECT_DETECTION_CONFIG["early_stop_inliers"]
+    )
+    detection_max_side = (
+        detection_max_side
+        if detection_max_side is not None
+        else OBJECT_DETECTION_CONFIG["detection_max_side"]
+    )
 
-    # ==========================================
-    # 검출용 파노라마 축소
-    # - 타일 탐색은 축소 이미지에서 수행해 전체 검사 수를 줄임
-    # - 최종 Polygon과 Tile 좌표는 원본 파노라마 좌표로 복원
-    # ==========================================
     detection_img, detection_scale = resize_image(
         panorama_img,
         max_side=detection_max_side,
     )
-
-    # ==========================================
-    # 기준 물체 특징점 사전 계산
-    # - Tile마다 같은 기준 물체 특징점을 다시 계산하지 않도록 재사용
-    # ==========================================
+    scan_start = time.perf_counter()
     keypoints_ref, descriptors_ref = detect_features(
         ref_img,
         method=method,
@@ -628,45 +614,88 @@ def detect_object_in_panorama(
         detection_scale,
     )
 
-    # ==========================================
-    # Coarse-to-Fine Tile 탐색
-    # - 모든 Tile 매칭 이미지는 세트명/방법별 폴더에 저장
-    # ==========================================
-    output_dir = Path(output_dir)
-    matching_root = MATCHING_RESULT_DIR / output_dir.parent.name
-    previous_match_dir = FEATURE_MATCH_DIR
-    FEATURE_MATCH_DIR = str(matching_root)
+    tile_detector = partial(
+        find_object,
+        feature_match_dir=(
+            Path(feature_match_dir)
+            if feature_match_dir is not None
+            else MATCHING_RESULT_DIR
+        ),
+        save_feature_matches=(
+            DEFAULT_SAVE_FEATURE_MATCHES
+            if save_feature_matches is None
+            else save_feature_matches
+        ),
+    )
+    scan_result = scan_scene(
+        ref_img=ref_img,
+        sce_img=detection_img,
+        ref_features=ref_features,
+        tile_size=tile_size,
+        coarse_stride=coarse_stride,
+        fine_stride=fine_stride,
+        coarse_top_k=coarse_top_k,
+        early_stop_inliers=early_stop_inliers,
+        ref_name=str(reference_path),
+        method=method,
+        tile_detector=tile_detector,
+    )
 
-    try:
-        scan_result = scan_scene(
-            ref_img=ref_img,
-            sce_img=detection_img,
-            ref_features=ref_features,
-            tile_size=tile_size,
-            coarse_stride=coarse_stride,
-            fine_stride=fine_stride,
-            coarse_top_k=OBJECT_DETECTION_CONFIG["coarse_top_k"],
-            early_stop_inliers=OBJECT_DETECTION_CONFIG["early_stop_inliers"],
-            ref_name=str(reference_path),
-            method=method,
-        )
-    finally:
-        FEATURE_MATCH_DIR = previous_match_dir
+    return {
+        "method": method,
+        "detection_img": detection_img,
+        "detection_scale": detection_scale,
+        "tile_size": tile_size,
+        "reference_keypoints": len(keypoints_ref),
+        "ref_features": ref_features,
+        "scan_result": scan_result,
+        "elapsed": time.perf_counter() - scan_start,
+    }
 
+
+# ==========================================
+# 공통 객체 검출 결과 생성
+# - 탐색 결과를 원본 파노라마 좌표로 복원해 Polygon과 기록 생성
+# - 파이프라인과 일괄 실험이 동일한 좌표 변환을 사용
+# ==========================================
+def build_object_detection_result(
+    ref_img,
+    panorama_img,
+    scan_data,
+    detection_result=None,
+):
+    scan_result = scan_data["scan_result"]
+    scan_stats = scan_result["stats"]
     best = scan_result["best"]
+    method = scan_data["method"]
+    detection_img = scan_data["detection_img"]
+    detection_scale = scan_data["detection_scale"]
+    tile_size = scan_data["tile_size"]
     result_image = panorama_img.copy()
     record = {
         "method": method,
         "is_detection": False,
-        "reference_keypoints": len(keypoints_ref),
+        "reference_keypoints": scan_data["reference_keypoints"],
         "detection_scale": detection_scale,
         "detection_size": [
             detection_img.shape[1],
             detection_img.shape[0],
         ],
-        "coarse_checked": scan_result["stats"]["coarse_checked"],
-        "fine_checked": scan_result["stats"]["fine_checked"],
-        "elapsed": scan_result["stats"]["elapsed"],
+        "coarse_checked": scan_stats["coarse_checked"],
+        "coarse_skipped_black": scan_stats.get(
+            "coarse_skipped_black",
+            0,
+        ),
+        "fine_checked": scan_stats["fine_checked"],
+        "fine_skipped_black": scan_stats.get(
+            "fine_skipped_black",
+            0,
+        ),
+        "total_skipped_black": scan_stats.get(
+            "total_skipped_black",
+            0,
+        ),
+        "elapsed": scan_data["elapsed"],
         "result_path": None,
         "matching_path": None,
     }
@@ -681,43 +710,8 @@ def detect_object_in_panorama(
     tile_width, tile_height = tile_size
     tile_x2 = min(tile_x + tile_width, scene_width)
     tile_y2 = min(tile_y + tile_height, scene_height)
-    best_tile = detection_img[tile_y:tile_y2, tile_x:tile_x2]
 
-    # ==========================================
-    # 최종 후보 Tile 매칭 이미지 저장
-    # - SAVE_FINAL_MATCHES 설정에 따라 final_matches.png 생성
-    # ==========================================
-    previous_save_matches = SAVE_FEATURE_MATCHES
-    previous_match_dir = FEATURE_MATCH_DIR
-    SAVE_FEATURE_MATCHES = SAVE_FINAL_MATCHES
-    FEATURE_MATCH_DIR = str(matching_root)
-
-    try:
-        final_result = find_object(
-            ref_img,
-            best_tile,
-            method=method,
-            ref_name=str(reference_path),
-            sce_name="final",
-            ref_features=ref_features,
-            coarse_mode=False,
-        )
-    finally:
-        SAVE_FEATURE_MATCHES = previous_save_matches
-        FEATURE_MATCH_DIR = previous_match_dir
-
-    matching_path = matching_root / method / "final_matches.png"
-    if SAVE_FINAL_MATCHES and matching_path.is_file():
-        record["matching_path"] = str(matching_path)
-
-    # ==========================================
-    # 검출 실패 기록
-    # - 최고 후보의 통계를 남겨 실패 사례를 분석할 수 있도록 구성
-    # ==========================================
-    if (
-        not best_result.get("is_detection", False)
-        or best_result.get("H") is None
-    ):
+    if not best_result.get("is_detection", False) or best_result.get("H") is None:
         record.update(
             {
                 "best_tile": [
@@ -741,15 +735,13 @@ def detect_object_in_panorama(
         )
         return result_image, record
 
-    detection_result = final_result or best_result
+    detection_result = detection_result or best_result
     corner_result = get_global_corners(
         ref_img=ref_img,
         H_tile=detection_result["H"],
         tile_origin=(tile_x, tile_y),
     )
-    corners_global = np.int32(
-        np.round(corner_result["global"] / detection_scale)
-    )
+    corners_global = np.int32(np.round(corner_result["global"] / detection_scale))
 
     original_height, original_width = panorama_img.shape[:2]
     original_tile = [
@@ -767,7 +759,6 @@ def detect_object_in_panorama(
         3,
         cv2.LINE_AA,
     )
-
     record.update(
         {
             "is_detection": True,
@@ -785,5 +776,74 @@ def detect_object_in_panorama(
         record["inlier_count"],
         record["inlier_ratio"],
     )
+
+    return result_image, record
+
+
+# ==========================================
+# 파노라마에서 기준 물체 검출
+# - 기준 물체 특징점은 한 번만 추출한 뒤 모든 Tile 탐색에 재사용
+# - Coarse-to-Fine 탐색으로 최종 후보 Tile을 선택
+# - 최종 Homography를 전체 파노라마 좌표로 변환해 Polygon 표시
+# ==========================================
+def detect_object_in_panorama(
+    ref_img,
+    panorama_img,
+    reference_path,
+    method,
+    output_dir,
+):
+    output_dir = Path(output_dir)
+    matching_root = MATCHING_RESULT_DIR / output_dir.parent.name
+
+    # ==========================================
+    # 공통 검출 실행
+    # - 특징점 추출, 축소, Coarse-to-Fine 탐색은 공통 함수에서 처리
+    # ==========================================
+    scan_data = run_object_detection_scan(
+        ref_img=ref_img,
+        panorama_img=panorama_img,
+        reference_path=reference_path,
+        method=method,
+        feature_match_dir=matching_root,
+    )
+    best = scan_data["scan_result"]["best"]
+    final_result = None
+
+    # ==========================================
+    # 최종 후보 Tile 매칭 이미지 저장
+    # - DEFAULT_SAVE_FINAL_MATCHES 설정에 따라 final_matches.png 생성
+    # ==========================================
+    if best is not None:
+        tile_x, tile_y = best["x"], best["y"]
+        detection_img = scan_data["detection_img"]
+        tile_width, tile_height = scan_data["tile_size"]
+        scene_height, scene_width = detection_img.shape[:2]
+        best_tile = detection_img[
+            tile_y : min(tile_y + tile_height, scene_height),
+            tile_x : min(tile_x + tile_width, scene_width),
+        ]
+        final_result = find_object(
+            ref_img,
+            best_tile,
+            method=scan_data["method"],
+            ref_name=str(reference_path),
+            sce_name="final",
+            ref_features=scan_data["ref_features"],
+            coarse_mode=False,
+            feature_match_dir=matching_root,
+            save_feature_matches=DEFAULT_SAVE_FINAL_MATCHES,
+        )
+
+    result_image, record = build_object_detection_result(
+        ref_img=ref_img,
+        panorama_img=panorama_img,
+        scan_data=scan_data,
+        detection_result=final_result,
+    )
+
+    matching_path = matching_root / scan_data["method"] / "final_matches.png"
+    if best is not None and DEFAULT_SAVE_FINAL_MATCHES and matching_path.is_file():
+        record["matching_path"] = str(matching_path)
 
     return result_image, record

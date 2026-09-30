@@ -3,16 +3,15 @@ import argparse
 import cv2
 import numpy as np
 
-from src.image_io import read_image, save_image
-from src.object_finder import detect_object_in_panorama
-from src.project_paths import RESULTS_DIR, project_path
-from src.settings import (
+from src.common.image_io import read_image, save_image
+from src.common.project_paths import RESULTS_DIR, project_path
+from src.common.settings import (
     LOGGING_CONFIG,
     OBJECT_DETECTION_CONFIG,
     PIPELINE_CONFIG,
 )
-from src.stitcher import SUPPORTED_METHODS, stitch_panorama
-
+from src.detection.object_finder import detect_object_in_panorama
+from src.panorama.stitcher import SUPPORTED_METHODS, stitch_panorama
 
 # ==========================================
 # OpenCV 로그 출력 설정
@@ -58,11 +57,7 @@ def run_detection_debug(
         raise ValueError(f"지원하지 않는 방법입니다: {method}")
 
     if output_path is None:
-        output_path = (
-            RESULTS_DIR
-            / "debug"
-            / f"detection_{method}.png"
-        )
+        output_path = RESULTS_DIR / "debug" / f"detection_{method}.png"
     else:
         output_path = project_path(output_path)
 
@@ -78,9 +73,7 @@ def run_detection_debug(
         method=method,
         output_dir=output_dir,
     )
-    record["result_path"] = str(
-        save_image(output_path, result_image)
-    )
+    record["result_path"] = str(save_image(output_path, result_image))
 
     return record
 

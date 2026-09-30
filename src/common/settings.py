@@ -1,13 +1,12 @@
 import json
 from pathlib import Path
 
-
 # ==========================================
 # JSON 설정 파일 로드
 # - 모든 실행 모듈이 동일한 config.json 값을 사용
 # - 설정 파일이 없거나 JSON 형식이 잘못되면 즉시 원인을 안내
 # ==========================================
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config.json"
 
 
 def load_config(path=CONFIG_PATH):
@@ -15,9 +14,7 @@ def load_config(path=CONFIG_PATH):
         with Path(path).open(encoding="utf-8") as file:
             config = json.load(file)
     except FileNotFoundError as error:
-        raise FileNotFoundError(
-            f"설정 파일을 찾을 수 없습니다: {path}"
-        ) from error
+        raise FileNotFoundError(f"설정 파일을 찾을 수 없습니다: {path}") from error
     except json.JSONDecodeError as error:
         raise ValueError(
             "config.json 형식이 올바르지 않습니다: "
@@ -38,14 +35,10 @@ def get_section(config, name):
     try:
         section = config[name]
     except KeyError as error:
-        raise KeyError(
-            f"config.json에 '{name}' 설정 영역이 없습니다."
-        ) from error
+        raise KeyError(f"config.json에 '{name}' 설정 영역이 없습니다.") from error
 
     if not isinstance(section, dict):
-        raise ValueError(
-            f"config.json의 '{name}' 설정은 객체여야 합니다."
-        )
+        raise ValueError(f"config.json의 '{name}' 설정은 객체여야 합니다.")
 
     return section
 

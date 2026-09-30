@@ -1,6 +1,7 @@
 import logging
-from src.project_paths import LOG_DIR
-from src.settings import LOGGING_CONFIG
+
+from src.common.project_paths import LOG_DIR
+from src.common.settings import LOGGING_CONFIG
 
 # ==========================================
 # 로그 저장 경로 준비
@@ -19,20 +20,14 @@ logger.setLevel(
 
 # 중복 설정 방지
 if not logger.handlers:
-
     # 파일 저장
-    file_handler = logging.FileHandler(
-        LOG_DIR / "opencv.log",
-        encoding="utf-8"
-    )
+    file_handler = logging.FileHandler(LOG_DIR / "opencv.log", encoding="utf-8")
 
     # 터미널 출력
     console_handler = logging.StreamHandler()
 
     # 로그 형식
-    formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)

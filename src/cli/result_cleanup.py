@@ -1,4 +1,4 @@
-from src.project_paths import RESULTS_DIR
+from src.common.project_paths import RESULTS_DIR
 
 
 # ==========================================

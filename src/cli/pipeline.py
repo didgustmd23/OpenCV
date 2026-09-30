@@ -4,16 +4,15 @@ import json
 import cv2
 import numpy as np
 
-from src.image_io import read_image, save_image
-from src.object_finder import detect_object_in_panorama
-from src.project_paths import get_object_detection_output_dir, project_path
-from src.settings import (
+from src.common.image_io import read_image, save_image
+from src.common.project_paths import get_object_detection_output_dir, project_path
+from src.common.settings import (
     LOGGING_CONFIG,
     OBJECT_DETECTION_CONFIG,
     PIPELINE_CONFIG,
 )
-from src.stitcher import SUPPORTED_METHODS, stitch_panorama
-
+from src.detection.object_finder import detect_object_in_panorama
+from src.panorama.stitcher import SUPPORTED_METHODS, stitch_panorama
 
 # ==========================================
 # OpenCV 로그 출력 설정

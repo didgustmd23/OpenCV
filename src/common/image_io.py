@@ -4,7 +4,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.project_paths import IMAGE_EXTENSIONS, project_path
+from src.common.project_paths import IMAGE_EXTENSIONS, project_path
 
 
 # ==========================================
@@ -28,16 +28,13 @@ def list_image_files(directory):
     directory = project_path(directory)
 
     if not directory.is_dir():
-        raise NotADirectoryError(
-            f"이미지 폴더를 찾을 수 없습니다: {directory}"
-        )
+        raise NotADirectoryError(f"이미지 폴더를 찾을 수 없습니다: {directory}")
 
     return sorted(
         (
             path
             for path in directory.iterdir()
-            if path.is_file()
-            and path.suffix.lower() in IMAGE_EXTENSIONS
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
         ),
         key=natural_sort_key,
     )
@@ -85,9 +82,7 @@ def read_image(path, max_side=None):
     image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
 
     if image is None:
-        raise ValueError(
-            f"이미지를 불러올 수 없습니다: {path}"
-        )
+        raise ValueError(f"이미지를 불러올 수 없습니다: {path}")
 
     image, _ = resize_image(image, max_side=max_side)
     return image
@@ -102,17 +97,13 @@ def save_image(path, image):
     path = project_path(path)
 
     if not path.suffix:
-        raise ValueError(
-            f"이미지 확장자가 필요합니다: {path}"
-        )
+        raise ValueError(f"이미지 확장자가 필요합니다: {path}")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(path.suffix, image)
 
     if not ok:
-        raise ValueError(
-            f"이미지 인코딩에 실패했습니다: {path}"
-        )
+        raise ValueError(f"이미지 인코딩에 실패했습니다: {path}")
 
     encoded.tofile(str(path))
     return path

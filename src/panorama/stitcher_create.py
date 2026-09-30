@@ -4,10 +4,9 @@ from pathlib import Path
 
 import cv2
 
-from src.image_io import list_image_files, read_image, save_image
-from src.project_paths import PANORAMA_RESULT_DIR, PANORAMA_SOURCE_DIR
-from src.settings import PANORAMA_CONFIG
-
+from src.common.image_io import list_image_files, read_image, save_image
+from src.common.project_paths import PANORAMA_RESULT_DIR, PANORAMA_SOURCE_DIR
+from src.common.settings import PANORAMA_CONFIG
 
 # ==========================================
 # OpenCV 내장 Stitcher 결과 저장 경로
@@ -37,19 +36,13 @@ def create_panorama_from_folder(
         return (
             False,
             0.0,
-            "이미지 부족 "
-            f"(최소 {minimum_images}장 필요, 현재 {len(image_paths)}장)",
+            f"이미지 부족 (최소 {minimum_images}장 필요, 현재 {len(image_paths)}장)",
         )
 
-    images = [
-        read_image(path, max_side=max_side)
-        for path in image_paths
-    ]
+    images = [read_image(path, max_side=max_side) for path in image_paths]
 
     if not hasattr(cv2, "Stitcher_create"):
-        raise RuntimeError(
-            "현재 OpenCV 환경에서 Stitcher_create를 찾을 수 없습니다."
-        )
+        raise RuntimeError("현재 OpenCV 환경에서 Stitcher_create를 찾을 수 없습니다.")
 
     stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
     start_time = time.perf_counter()
@@ -66,12 +59,9 @@ def create_panorama_from_folder(
         )
 
     status_messages = {
-        cv2.Stitcher_ERR_NEED_MORE_IMGS:
-            "ERR_NEED_MORE_IMGS (특징점 부족 또는 겹침 없음)",
-        cv2.Stitcher_ERR_HOMOGRAPHY_ESTIMATION_FAIL:
-            "ERR_HOMOGRAPHY_ESTIMATION_FAIL (호모그래피 계산 실패)",
-        cv2.Stitcher_ERR_CAMERA_PARAMS_ADJUST_FAIL:
-            "ERR_CAMERA_PARAMS_ADJUST_FAIL (카메라 파라미터 조정 실패)",
+        cv2.Stitcher_ERR_NEED_MORE_IMGS: "ERR_NEED_MORE_IMGS (특징점 부족 또는 겹침 없음)",
+        cv2.Stitcher_ERR_HOMOGRAPHY_ESTIMATION_FAIL: "ERR_HOMOGRAPHY_ESTIMATION_FAIL (호모그래피 계산 실패)",
+        cv2.Stitcher_ERR_CAMERA_PARAMS_ADJUST_FAIL: "ERR_CAMERA_PARAMS_ADJUST_FAIL (카메라 파라미터 조정 실패)",
     }
     return (
         False,
@@ -95,35 +85,25 @@ def run_experiments(
 
         if not target_path.is_dir():
             raise FileNotFoundError(
-                "지정한 파노라마 세트 폴더를 찾을 수 없습니다: "
-                f"{target_path}"
+                f"지정한 파노라마 세트 폴더를 찾을 수 없습니다: {target_path}"
             )
 
         set_dirs = [target_path]
     else:
         set_dirs = sorted(
-            (
-                path
-                for path in PANORAMA_SOURCE_DIR.glob("set*")
-                if path.is_dir()
-            ),
+            (path for path in PANORAMA_SOURCE_DIR.glob("set*") if path.is_dir()),
             key=lambda path: path.name,
         )
 
     if not set_dirs:
         raise FileNotFoundError(
-            "실행할 파노라마 세트 폴더를 찾을 수 없습니다: "
-            f"{PANORAMA_SOURCE_DIR}"
+            f"실행할 파노라마 세트 폴더를 찾을 수 없습니다: {PANORAMA_SOURCE_DIR}"
         )
 
     summary_results = []
 
     for input_dir in set_dirs:
-        output_path = (
-            CREATE_RESULT_DIR
-            / input_dir.name
-            / "panorama.jpg"
-        )
+        output_path = CREATE_RESULT_DIR / input_dir.name / "panorama.jpg"
         success, elapsed_time, note = create_panorama_from_folder(
             input_dir=input_dir,
             output_path=output_path,

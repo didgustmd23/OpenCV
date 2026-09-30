@@ -15,20 +15,52 @@
 ## 3. 폴더 구성
 
 ```text
-src/                           # 프로젝트 실행 코드
-├── pipeline.py                # 파노라마 합성 · 객체 검출 전체 실행
-├── main.py                    # 개별 기능 테스트 · 디버그 실행
-├── stitcher.py                # 파노라마 합성 핵심 기능
-├── stitcher_create.py         # OpenCV 내장 Stitcher 비교 실행
-├── experiment_runner.py       # 일괄 실험·통계·노트북 시각화 도우미
-├── feature_match.py           # 특징점 추출·매칭 공통 기능
-├── object_finder.py           # 호모그래피 기반 객체 검출
-├── tile_scanner.py            # Coarse-to-Fine 타일 탐색
-├── image_io.py                # 이미지 파일 입출력
-├── project_paths.py           # 공통 경로
-├── settings.py                # config.json 로더
-├── logger.py                  # 콘솔·opencv.log 기록 설정
-├── result_cleanup.py          # 생성 결과 정리 기능
+src/
+├── cli/                       # 실행·관리 진입점
+│   ├── main.py                # 개별 기능 테스트·디버그
+│   ├── pipeline.py            # 파노라마 → 객체 검출 전체 실행
+│   ├── result_cleanup.py      # 생성 결과 정리
+│   └── __init__.py            # cli 패키지 표시 파일
+├── common/                    # 공통 이미지·설정·경로·로그 기능
+│   ├── feature_match.py        # SIFT·ORB·ALIKED 특징점 추출과 매칭
+│   ├── image_io.py             # 이미지 읽기·저장·축소
+│   ├── logger.py               # 파일·콘솔 로그 설정
+│   ├── project_paths.py        # 프로젝트 공통 경로
+│   ├── settings.py             # config.json 설정 로드
+│   └── __init__.py             # common 패키지 표시 파일
+├── panorama/                  # 파노라마 합성·실험·시각화
+│   ├── stitcher.py             # 직접 호모그래피 기반 파노라마 합성
+│   ├── stitcher_create.py      # OpenCV 내장 Stitcher 비교 구현
+│   ├── panorama_experiments.py # 파노라마 세트 일괄 실험·통계 수집
+│   ├── panorama_figures.py     # 매칭·합성 결과 Figure 생성
+│   └── __init__.py             # panorama 패키지 표시 파일
+├── detection/                 # 객체 검출·Tile 탐색·변형·시각화
+│   ├── object_finder.py        # 특징점 매칭·호모그래피 기반 객체 검출
+│   ├── tile_scanner.py         # Coarse-to-Fine Tile 탐색
+│   ├── detection_transforms.py # 회전·크기·조명 실험용 기준 물체 변형
+│   ├── detection_experiments.py # 객체 검출 실험 실행 기능
+│   ├── detection_figures.py     # 객체 검출 결과 Figure 생성
+│   └── __init__.py              # detection 패키지 표시 파일
+├── experiment/                # 실험 설정·케이스·실행·결과 집계
+│   ├── experiment_runner.py    # 실험 환경설정과 일괄 실행 진입 함수
+│   ├── experiment_cases.py     # 기준 물체·파노라마 테스트 세트 탐색
+│   ├── experiment_results.py   # CSV 저장과 결과 요약
+│   └── __init__.py             # experiment 패키지 표시 파일
+├── reporting/                 # Pandas 표·보고서 이미지 변환
+│   ├── report_tables.py        # 보고서용 DataFrame·표 스타일 생성
+│   ├── report_images.py        # Matplotlib Figure를 보고서 이미지로 변환
+│   └── __init__.py             # reporting 패키지 표시 파일
+├── gpu_experiment/            # GPU 전용 독립 실험
+│   ├── main.py                # GPU 객체 검출·벤치마크 실행 진입점
+│   ├── gpu_pipeline.py        # GPU Coarse-to-Fine 객체 검출 흐름
+│   ├── gpu_aliked.py          # CUDA ALIKED 특징점 추출
+│   ├── gpu_lightglue.py       # CUDA LightGlue 특징점 매칭
+│   ├── gpu_detector.py        # GPU 검출 결과·호모그래피 계산
+│   ├── gpu_visualization.py   # GPU 검출·매칭 결과 시각화
+│   ├── benchmark.py           # CPU·GPU 실행 시간 비교
+│   ├── requirements-gpu.txt   # GPU 실험 전용 의존성
+│   ├── README.md              # GPU 실험 실행 방법
+│   └── __init__.py            # gpu_experiment 패키지 표시 파일
 └── __init__.py                # src 패키지 표시 파일
 
 data/
@@ -54,10 +86,10 @@ results/
 
 ### 4.1 파노라마 합성만 테스트
 
-연속 사진의 합성 기능만 확인할 때는 `src.main`의 stitch 디버그 모드를 사용합니다. 실행 전 [config.json](config.json)에서 파노라마 매칭 기준, 모델 경로, 결과 폴더를 확인합니다.
+연속 사진의 합성 기능만 확인할 때는 `src.cli.main`의 stitch 디버그 모드를 사용합니다. 실행 전 [config.json](config.json)에서 파노라마 매칭 기준, 모델 경로, 결과 폴더를 확인합니다.
 
 ```powershell
-python -m src.main --mode stitch --input data/set01 --method sift --max-side 1600
+python -m src.cli.main --mode stitch --input data/set01 --method sift --max-side 1600
 ```
 
 결과는 `results/debug/panorama/set01/SIFT/`에 저장됩니다. 이 경로는 테스트 전용이므로, 정식 결과인 `results/panorama/`를 덮어쓰지 않습니다.
@@ -69,13 +101,13 @@ python -m src.main --mode stitch --input data/set01 --method sift --max-side 160
 연속 사진을 합성한 뒤, 생성된 파노라마 메모리 이미지에서 기준 물체를 바로 검출합니다.
 
 ```powershell
-python -m src.pipeline --input data/set01 --reference data/objects/set01/target.jpg --method sift --max-side 1024
+python -m src.cli.pipeline --input data/set01 --reference data/objects/set01/target.jpg --method sift --max-side 1024
 ```
 
 합성한 파노라마를 다른 경로에도 복사하려면 `--export`를 추가합니다. 기본 결과 경로는 그대로 유지됩니다.
 
 ```powershell
-python -m src.pipeline --input data/set01 --reference data/objects/set01/target.jpg --method sift --export data/exported_panorama.jpg
+python -m src.cli.pipeline --input data/set01 --reference data/objects/set01/target.jpg --method sift --export data/exported_panorama.jpg
 ```
 
 결과는 아래 위치에 저장됩니다.
@@ -96,18 +128,18 @@ results/matching/keypoint_matches/{입력_폴더명}/SIFT/ # Coarse·Fine Tile�
 
 ### 4.4 개별 기능 테스트·디버그
 
-`src.main`은 전체 파이프라인을 실행하지 않습니다. 파노라마 합성 또는 완성된 파노라마의 객체 검출을 각각 확인할 때 사용합니다.
+`src.cli.main`은 전체 파이프라인을 실행하지 않습니다. 파노라마 합성 또는 완성된 파노라마의 객체 검출을 각각 확인할 때 사용합니다.
 
 ```powershell
 # 완성 파노라마의 객체 검출 기능만 테스트
-python -m src.main --mode detect --scene results/panorama/set01/SIFT/panorama.jpg --reference data/objects/set01/target.jpg --method sift
+python -m src.cli.main --mode detect --scene results/panorama/set01/SIFT/panorama.jpg --reference data/objects/set01/target.jpg --method sift
 ```
 
 디버그 결과는 `results/debug/` 아래에 저장됩니다.
 
 ## 5. 실행 요약 파일: `pipeline_summary.json`
 
-`src.pipeline` 실행이 끝나면 아래 경로에 파노라마 합성과 객체 검출의 핵심 결과를 JSON으로 저장합니다.
+`src.cli.pipeline` 실행이 끝나면 아래 경로에 파노라마 합성과 객체 검출의 핵심 결과를 JSON으로 저장합니다.
 
 ```text
 results/object_detection/{입력 폴더명}/{METHOD}/pipeline_summary.json
@@ -145,7 +177,7 @@ results/object_detection/{입력 폴더명}/{METHOD}/pipeline_summary.json
 
 ## 6. 실험 결과 CSV
 
-`experiment_runner.py`로 기준 물체의 회전, 크기, 밝기를 바꿔 실험하면 아래 두 CSV가 생성됩니다.
+`detection_experiments.py`와 `experiment_results.py`로 기준 물체의 회전, 크기, 밝기를 바꿔 실험하면 아래 두 CSV가 생성됩니다.
 
 ```text
 results/object_detection/metrics/experiment_records.csv
@@ -204,7 +236,7 @@ results/object_detection/metrics/method_condition_summary.csv
 `result_cleanup.py`의 `clear_results()`는 `results/` 아래에서 생성된 파일만 정리합니다. `.gitkeep`, `opencv.log`, 폴더 구조는 유지합니다. 기본값은 삭제하지 않고 대상만 반환하는 미리 보기 모드입니다.
 
 ```python
-from src.result_cleanup import clear_results
+from src.cli.result_cleanup import clear_results
 
 targets = clear_results()             # 삭제 대상 확인
 clear_results(dry_run=False)          # 확인 후 실제 삭제
