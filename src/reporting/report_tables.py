@@ -57,10 +57,10 @@ def build_panorama_matching_table(summary_rows):
         "set": "세트",
         "method": "방법",
         "pair_count": "사진 쌍",
-        "mean_raw_matches": "평균 원시 매칭",
-        "mean_filtered_matches": "평균 필터링 매칭",
-        "mean_inliers": "평균 Inlier",
-        "mean_inlier_ratio": "평균 Inlier 비율",
+        "mean_raw_matches": "평균 검사 전 매칭 수",
+        "mean_filtered_matches": "평균 검사 후 매칭 수",
+        "mean_inliers": "평균 RANSAC Inlier 수",
+        "mean_inlier_ratio": "평균 RANSAC Inlier 비율",
     }
 
     return (
