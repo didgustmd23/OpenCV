@@ -43,6 +43,7 @@ Thumbs.db
 # Project data and generated results
 data/
 results/
+models/gpu_experiment/
 
 # Temporary
 *.tmp
