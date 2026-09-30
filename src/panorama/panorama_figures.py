@@ -200,6 +200,77 @@ def create_panorama_matching_gallery_figure(
     return figure
 
 
+# ==========================================
+# 파노라마 합성 실패 사례 매칭 Figure 생성
+# - failures 하위의 데이터셋·방법 폴더를 자동 탐색
+# - 기본값은 기하 검증을 통과한 RANSAC 매칭 이미지만 표시
+# - stage를 None으로 지정하면 raw·filtered·ransac 전체 이미지 표시
+# ==========================================
+def create_panorama_failure_match_figures(
+    failure_dir,
+    pyplot,
+    *,
+    stage="ransac",
+    column_count=2,
+):
+    if stage not in {None, "raw", "filtered", "ransac"}:
+        raise ValueError("stage는 raw, filtered, ransac 또는 None이어야 합니다.")
+    if column_count <= 0:
+        raise ValueError("column_count는 양수여야 합니다.")
+
+    failure_dir = Path(failure_dir)
+    image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    image_paths = sorted(
+        path
+        for path in failure_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in image_extensions
+    )
+    if stage is not None:
+        image_paths = [
+            path for path in image_paths if path.stem.endswith(f"_{stage}")
+        ]
+    if not image_paths:
+        return []
+
+    grouped_paths = {}
+    for image_path in image_paths:
+        grouped_paths.setdefault(image_path.parent, []).append(image_path)
+
+    figures = []
+    stage_label = "전체 매칭 단계" if stage is None else stage.upper()
+    for group_dir, group_paths in grouped_paths.items():
+        group_name = group_dir.name
+        for method_name in ("ALIKED", "SIFT", "ORB"):
+            if group_name.endswith(method_name):
+                dataset_name = group_name[: -len(method_name)]
+                group_name = f"{dataset_name} / {method_name}"
+                break
+        row_count = (len(group_paths) + column_count - 1) // column_count
+        figure, axes = pyplot.subplots(
+            row_count,
+            column_count,
+            figsize=(7 * column_count, 4.5 * row_count),
+            constrained_layout=True,
+        )
+        axes = np.atleast_1d(axes).ravel()
+
+        for axis, image_path in zip(axes, group_paths):
+            axis.imshow(read_image_for_display(image_path, max_width=900))
+            axis.set_title(image_path.stem.replace("_", " "), fontsize=11)
+            axis.set_xticks([])
+            axis.set_yticks([])
+        for axis in axes[len(group_paths) :]:
+            axis.axis("off")
+
+        figure.suptitle(
+            f"파노라마 합성 실패 사례: {group_name} / {stage_label}",
+            fontsize=16,
+        )
+        figures.append(figure)
+
+    return figures
+
+
 def create_panorama_result_comparison_figure(summary_rows, pyplot, *, set_name=None):
     selected_set, rows = _select_panorama_visual_rows(summary_rows, set_name)
     figure, axes = pyplot.subplots(
