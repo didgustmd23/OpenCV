@@ -31,6 +31,8 @@
     "coarse_top_k": 3,
     "early_stop_inliers": 50,
     "minimum_tile_size": [300, 250],
+    "black_pixel_threshold": 8,
+    "max_black_tile_ratio": 0.7,
     "save_feature_matches": true,
     "save_final_matches": true
   },

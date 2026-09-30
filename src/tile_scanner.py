@@ -1,5 +1,6 @@
 import time
 import cv2
+import numpy as np
 
 from src.logger import logger
 from src.object_finder import find_object
@@ -9,6 +10,46 @@ from src.settings import OBJECT_DETECTION_CONFIG
 MIN_TILE_WIDTH, MIN_TILE_HEIGHT = (
     OBJECT_DETECTION_CONFIG["minimum_tile_size"]
 )
+BLACK_PIXEL_THRESHOLD = OBJECT_DETECTION_CONFIG[
+    "black_pixel_threshold"
+]
+MAX_BLACK_TILE_RATIO = OBJECT_DETECTION_CONFIG[
+    "max_black_tile_ratio"
+]
+
+
+# ==========================================
+# 검은 캔버스 영역 비율 계산
+# - 직접 파노라마 합성의 빈 영역은 거의 검은 픽셀로 남음
+# - 실제 영상 정보가 거의 없는 Tile만 탐색 대상에서 제외
+# ==========================================
+def get_black_pixel_ratio(tile):
+    if tile.size == 0:
+        return 1.0
+
+    if tile.ndim == 2:
+        black_pixels = tile <= BLACK_PIXEL_THRESHOLD
+    else:
+        black_pixels = np.all(
+            tile <= BLACK_PIXEL_THRESHOLD,
+            axis=2,
+        )
+
+    return float(np.mean(black_pixels))
+
+
+# ==========================================
+# 검은 캔버스 Tile 제외 여부 판단
+# - 기본값은 70% 이상이 검은 픽셀인 경우만 제외
+# - 야간·어두운 장면의 정보가 과도하게 사라지는 것을 방지
+# ==========================================
+def should_skip_black_tile(tile):
+    black_ratio = get_black_pixel_ratio(tile)
+
+    return (
+        black_ratio >= MAX_BLACK_TILE_RATIO,
+        black_ratio,
+    )
 
 # ==========================================
 # Fine 후보 우선순위 계산
@@ -156,6 +197,7 @@ def scan_fine(
     fine_results = []
 
     fine_checked_count = 0
+    fine_skipped_black_count = 0
     early_stopped = False
 
     fine_start = time.time()
@@ -173,6 +215,21 @@ def scan_fine(
         y2 = min(y + tile_h, scene_h)
 
         tile = sce_img[y:y2, x:x2]
+
+        skip_black_tile, black_ratio = should_skip_black_tile(tile)
+
+        if skip_black_tile:
+            fine_skipped_black_count += 1
+
+            logger.debug(
+                "Fine Tile 검은 영역 제외: "
+                "tile=%d, xy=(%d, %d), black_ratio=%.3f",
+                fine_index,
+                x,
+                y,
+                black_ratio,
+            )
+            continue
 
         fine_checked_count += 1
 
@@ -271,9 +328,10 @@ def scan_fine(
     fine_elapsed = time.time() - fine_start
 
     logger.info(
-        "Fine 탐색 완료: checked=%d, valid=%d, "
+        "Fine 탐색 완료: checked=%d, skipped_black=%d, valid=%d, "
         "elapsed=%.2fs, early_stop=%s",
         fine_checked_count,
+        fine_skipped_black_count,
         len(fine_results),
         fine_elapsed,
         early_stopped,
@@ -316,6 +374,7 @@ def scan_fine(
         "results": fine_results,
         "best": best_fine,
         "checked_count": fine_checked_count,
+        "skipped_black_count": fine_skipped_black_count,
         "early_stopped": early_stopped,
         "elapsed": fine_elapsed,
     }
@@ -347,6 +406,7 @@ def scan_coarse(
     coarse_positions = set()
 
     coarse_index = 0
+    coarse_skipped_black_count = 0
 
     coarse_start = time.perf_counter()
 
@@ -370,6 +430,20 @@ def scan_coarse(
             coarse_positions.add((x, y))
 
             tile = sce_img[y:y2, x:x2]
+
+            skip_black_tile, black_ratio = should_skip_black_tile(tile)
+
+            if skip_black_tile:
+                coarse_skipped_black_count += 1
+
+                logger.debug(
+                    "Coarse Tile 검은 영역 제외: "
+                    "xy=(%d, %d), black_ratio=%.3f",
+                    x,
+                    y,
+                    black_ratio,
+                )
+                continue
 
             coarse_index += 1
 
@@ -462,8 +536,10 @@ def scan_coarse(
     coarse_elapsed = time.perf_counter() - coarse_start
 
     logger.info(
-        "Coarse 탐색 완료: checked=%d, valid=%d, elapsed=%.2fs",
+        "Coarse 탐색 완료: checked=%d, skipped_black=%d, "
+        "valid=%d, elapsed=%.2fs",
         coarse_index,
+        coarse_skipped_black_count,
         len(coarse_candidates),
         coarse_elapsed,
     )
@@ -508,6 +584,7 @@ def scan_coarse(
         "top_candidates": top_coarse_candidates,
         "positions": coarse_positions,
         "checked_count": coarse_index,
+        "skipped_black_count": coarse_skipped_black_count,
         "elapsed": coarse_elapsed,
     }
 
@@ -578,8 +655,15 @@ def scan_scene(
             "fine_positions": [],
             "stats": {
                 "coarse_checked": coarse_scan["checked_count"],
+                "coarse_skipped_black": coarse_scan[
+                    "skipped_black_count"
+                ],
                 "fine_checked": 0,
+                "fine_skipped_black": 0,
                 "total_checked": coarse_scan["checked_count"],
+                "total_skipped_black": coarse_scan[
+                    "skipped_black_count"
+                ],
                 "early_stopped": False,
                 "elapsed": scan_elapsed,
             },
@@ -622,19 +706,23 @@ def scan_scene(
     # ==========================================
 
     coarse_checked = coarse_scan["checked_count"]
+    coarse_skipped_black = coarse_scan["skipped_black_count"]
     fine_checked = fine_scan["checked_count"]
+    fine_skipped_black = fine_scan["skipped_black_count"]
 
     total_checked = coarse_checked + fine_checked
+    total_skipped_black = coarse_skipped_black + fine_skipped_black
 
     scan_elapsed = time.perf_counter() - scan_start
 
     logger.info(
         "전체 탐색 완료: "
-        "coarse=%d, fine=%d, total=%d, "
+        "coarse=%d, fine=%d, total=%d, skipped_black=%d, "
         "early_stop=%s, elapsed=%.2fs",
         coarse_checked,
         fine_checked,
         total_checked,
+        total_skipped_black,
         fine_scan["early_stopped"],
         scan_elapsed,
     )
@@ -646,8 +734,11 @@ def scan_scene(
         "fine_positions": fine_positions,
         "stats": {
             "coarse_checked": coarse_checked,
+            "coarse_skipped_black": coarse_skipped_black,
             "fine_checked": fine_checked,
+            "fine_skipped_black": fine_skipped_black,
             "total_checked": total_checked,
+            "total_skipped_black": total_skipped_black,
             "early_stopped": fine_scan["early_stopped"],
             "elapsed": scan_elapsed,
         },

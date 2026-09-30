@@ -1,6 +1,5 @@
 import csv
 import re
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,10 +7,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import src.object_finder as object_finder
-from src.feature_match import detect_features
-from src.image_io import resize_image
-from src.object_finder import get_global_corners
+from src.object_finder import (
+    build_object_detection_result,
+    run_object_detection_scan,
+)
 from src.project_paths import (
     MATCHING_RESULT_DIR,
     OBJECT_DETECTION_RESULT_DIR,
@@ -20,7 +19,6 @@ from src.project_paths import (
 )
 from src.settings import OBJECT_DETECTION_CONFIG
 from src.stitcher import stitch_panorama
-from src.tile_scanner import scan_scene
 
 
 # ==========================================
@@ -1337,11 +1335,6 @@ def detect_and_save(
             f"파노라마 이미지를 불러올 수 없습니다: {scene_path}"
         )
 
-    detection_scene_img, detection_scale = resize_image(
-        scene_img,
-        max_side=detection_max_side,
-    )
-
     ref_img = transform_reference(
         ref_img,
         rotation_deg=condition.get("rotation_deg", 0.0),
@@ -1350,36 +1343,36 @@ def detect_and_save(
     )
 
     # ==========================================
-    # Reference 특징점 사전 계산 및 Panorama 탐색
+    # 공통 객체 검출 실행
+    # - 기준 물체 특징점, 축소, Coarse-to-Fine 탐색을 한 곳에서 처리
     # - 변형 실험은 중간 Tile 매칭 이미지를 저장하지 않아 I/O를 줄임
     # ==========================================
-    start_time = time.perf_counter()
-    kp_ref, des_ref = detect_features(ref_img, method=method)
-
-    previous_save_matches = object_finder.SAVE_FEATURE_MATCHES
-    object_finder.SAVE_FEATURE_MATCHES = save_visuals
-
-    try:
-        scan_result = scan_scene(
-            ref_img=ref_img,
-            sce_img=detection_scene_img,
-            ref_features=(kp_ref, des_ref),
-            tile_size=tile_size,
-            coarse_stride=coarse_stride,
-            fine_stride=fine_stride,
-            coarse_top_k=coarse_top_k,
-            early_stop_inliers=early_stop_inliers,
-            ref_name=ref_path,
-            method=method,
-        )
-    finally:
-        object_finder.SAVE_FEATURE_MATCHES = previous_save_matches
+    scan_data = run_object_detection_scan(
+        ref_img=ref_img,
+        panorama_img=scene_img,
+        reference_path=ref_path,
+        method=method,
+        tile_size=tile_size,
+        coarse_stride=coarse_stride,
+        fine_stride=fine_stride,
+        coarse_top_k=coarse_top_k,
+        early_stop_inliers=early_stop_inliers,
+        detection_max_side=detection_max_side,
+        feature_match_dir=matching_root,
+        save_feature_matches=save_visuals,
+    )
+    result_image, detection_record = build_object_detection_result(
+        ref_img=ref_img,
+        panorama_img=scene_img,
+        scan_data=scan_data,
+    )
+    scan_result = scan_data["scan_result"]
+    best = scan_result["best"]
+    method = scan_data["method"]
 
     # ==========================================
     # 기본 결과 레코드 준비
     # ==========================================
-    result_image = scene_img.copy()
-    best = scan_result["best"]
     case_dir = (
         Path(result_root)
         / case_name
@@ -1394,17 +1387,36 @@ def detect_and_save(
         "rotation_deg": condition.get("rotation_deg", 0.0),
         "scale_factor": condition.get("scale_factor", 1.0),
         "brightness_factor": condition.get("brightness_factor", 1.0),
-        "keypoints": len(kp_ref),
-        "detection_scale": detection_scale,
-        "detection_size": (
-            detection_scene_img.shape[1],
-            detection_scene_img.shape[0],
-        ),
-        "elapsed": time.perf_counter() - start_time,
-        "is_detection": False,
-        "result_path": None,
+        "keypoints": detection_record["reference_keypoints"],
+        "detection_scale": detection_record["detection_scale"],
+        "detection_size": detection_record["detection_size"],
+        "coarse_checked": detection_record["coarse_checked"],
+        "coarse_skipped_black": detection_record[
+            "coarse_skipped_black"
+        ],
+        "fine_checked": detection_record["fine_checked"],
+        "fine_skipped_black": detection_record["fine_skipped_black"],
+        "total_skipped_black": detection_record[
+            "total_skipped_black"
+        ],
+        "elapsed": detection_record["elapsed"],
+        "is_detection": detection_record["is_detection"],
+        "result_path": detection_record["result_path"],
         "match_image_path": None,
     }
+    for key in (
+        "tile",
+        "match_count",
+        "inlier_count",
+        "inlier_ratio",
+        "best_tile",
+        "best_match_count",
+        "best_inlier_count",
+        "best_inlier_ratio",
+        "minimum_inliers",
+    ):
+        if key in detection_record:
+            record[key] = detection_record[key]
 
     # ==========================================
     # 최종 Fine Tile 매칭 이미지 저장
@@ -1434,46 +1446,6 @@ def detect_and_save(
                     f"{saved_match_path}"
                 )
             record["match_image_path"] = str(saved_match_path)
-
-    # ==========================================
-    # Global Polygon 생성 및 검출 지표 기록
-    # ==========================================
-    if (
-        best is not None
-        and best["result"].get("is_detection", False)
-        and best["result"].get("H") is not None
-    ):
-        best_result = best["result"]
-        corner_result = get_global_corners(
-            ref_img=ref_img,
-            H_tile=best_result["H"],
-            tile_origin=(best["x"], best["y"]),
-        )
-        corners_global = np.int32(
-            np.round(corner_result["global"] / detection_scale)
-        )
-
-        cv2.polylines(
-            result_image,
-            [corners_global],
-            True,
-            (0, 255, 0),
-            3,
-            cv2.LINE_AA,
-        )
-
-        record.update(
-            {
-                "is_detection": True,
-                "match_count": best_result["match_count"],
-                "inlier_count": best_result["inlier_count"],
-                "inlier_ratio": best_result["inlier_ratio"],
-                "tile": (
-                    round(best["x"] / detection_scale),
-                    round(best["y"] / detection_scale),
-                ),
-            }
-        )
 
     # ==========================================
     # 기본 조건의 최종 검출 결과 이미지 저장
