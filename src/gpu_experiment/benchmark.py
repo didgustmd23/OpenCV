@@ -9,7 +9,7 @@ import torch
 from src.gpu_experiment.gpu_detector import GPUObjectDetector
 from src.gpu_experiment.gpu_pipeline import load_detection_images
 from src.gpu_experiment.gpu_visualization import save_final_visuals
-from src.object_finder import (
+from src.detection.object_finder import (
     build_object_detection_result,
     run_object_detection_scan,
 )

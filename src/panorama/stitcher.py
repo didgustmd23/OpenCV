@@ -4,21 +4,20 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.feature_match import (
+from src.common.feature_match import (
     detect_features,
     draw_matches,
     get_matched_points,
     match_features,
     ratio_test,
 )
-from src.image_io import list_image_files, read_image, save_image
-from src.logger import logger
-from src.project_paths import (
+from src.common.image_io import list_image_files, read_image, save_image
+from src.common.logger import logger
+from src.common.project_paths import (
     PANORAMA_RESULT_DIR,
     project_path,
 )
-from src.settings import PANORAMA_CONFIG
-
+from src.common.settings import PANORAMA_CONFIG
 
 SUPPORTED_METHODS = tuple(PANORAMA_CONFIG["methods"])
 
@@ -38,9 +37,7 @@ def extract_features(images, paths, method):
         )
 
         if descriptors is None or len(keypoints) < 4:
-            raise ValueError(
-                f"특징점이 부족합니다: {path.name}"
-            )
+            raise ValueError(f"특징점이 부족합니다: {path.name}")
 
         logger.info(
             "특징점 추출: image=%s, method=%s, keypoints=%d",
@@ -79,11 +76,7 @@ def get_pair_matches(kp1, desc1, image1, kp2, desc2, image2, method, ratio):
         raw_matches = list(matches)
         good_matches = raw_matches
     else:
-        knn_matches = [
-            pair
-            for pair in matches
-            if len(pair) >= 2
-        ]
+        knn_matches = [pair for pair in matches if len(pair) >= 2]
         raw_matches = [pair[0] for pair in knn_matches]
         good_matches = ratio_test(
             knn_matches,
@@ -152,9 +145,7 @@ def estimate_pair_transforms(
         )
 
         if len(good_matches) < 4:
-            raise ValueError(
-                f"{label}: 필터 후 매칭이 4개 미만입니다."
-            )
+            raise ValueError(f"{label}: 필터 후 매칭이 4개 미만입니다.")
 
         points1, points2 = get_matched_points(
             kp1,
@@ -172,20 +163,14 @@ def estimate_pair_transforms(
         )
 
         if matrix is None or mask is None or not np.isfinite(matrix).all():
-            raise ValueError(
-                f"{label}: 호모그래피 계산에 실패했습니다."
-            )
+            raise ValueError(f"{label}: 호모그래피 계산에 실패했습니다.")
 
         inlier_matches = [
-            match
-            for match, keep in zip(good_matches, mask.ravel())
-            if keep
+            match for match, keep in zip(good_matches, mask.ravel()) if keep
         ]
 
         if len(inlier_matches) < 4:
-            raise ValueError(
-                f"{label}: RANSAC Inlier 매칭이 부족합니다."
-            )
+            raise ValueError(f"{label}: RANSAC Inlier 매칭이 부족합니다.")
 
         save_image(
             matching_dir / f"{pair_name}_ransac.png",
@@ -229,15 +214,11 @@ def align_to_center(pair_transforms, image_count):
     transforms[center_index] = np.eye(3, dtype=np.float64)
 
     for index in range(center_index + 1, image_count):
-        transforms[index] = (
-            transforms[index - 1]
-            @ pair_transforms[index - 1]
-        )
+        transforms[index] = transforms[index - 1] @ pair_transforms[index - 1]
 
     for index in range(center_index - 1, -1, -1):
-        transforms[index] = (
-            transforms[index + 1]
-            @ np.linalg.inv(pair_transforms[index])
+        transforms[index] = transforms[index + 1] @ np.linalg.inv(
+            pair_transforms[index]
         )
 
     return transforms
@@ -251,12 +232,14 @@ def align_to_center(pair_transforms, image_count):
 def image_corners(image):
     height, width = image.shape[:2]
 
-    return np.float32([
-        [0, 0],
-        [width, 0],
-        [width, height],
-        [0, height],
-    ]).reshape(-1, 1, 2)
+    return np.float32(
+        [
+            [0, 0],
+            [width, 0],
+            [width, height],
+            [0, height],
+        ]
+    ).reshape(-1, 1, 2)
 
 
 # ==========================================
@@ -269,22 +252,15 @@ def transformed_corners(image, matrix):
     xy = corners.reshape(-1, 2)
     denominator = xy @ matrix[2, :2] + matrix[2, 2]
 
-    same_sign = (
-        np.all(denominator > 1e-8)
-        or np.all(denominator < -1e-8)
-    )
+    same_sign = np.all(denominator > 1e-8) or np.all(denominator < -1e-8)
 
     if not same_sign:
-        raise ValueError(
-            "불안정한 호모그래피입니다. 매칭 결과를 확인하세요."
-        )
+        raise ValueError("불안정한 호모그래피입니다. 매칭 결과를 확인하세요.")
 
     projected = cv2.perspectiveTransform(corners, matrix)
 
     if not np.isfinite(projected).all():
-        raise ValueError(
-            "변환된 모서리 좌표가 유효하지 않습니다."
-        )
+        raise ValueError("변환된 모서리 좌표가 유효하지 않습니다.")
 
     return projected
 
@@ -323,8 +299,7 @@ def feather_weight(image):
 # ==========================================
 def build_panorama(images, transforms):
     polygons = [
-        transformed_corners(image, matrix)
-        for image, matrix in zip(images, transforms)
+        transformed_corners(image, matrix) for image, matrix in zip(images, transforms)
     ]
 
     all_points = np.concatenate(polygons, axis=0).reshape(-1, 2)
@@ -337,21 +312,21 @@ def build_panorama(images, transforms):
     if (
         canvas_width <= 0
         or canvas_height <= 0
-        or max(canvas_width, canvas_height)
-        > PANORAMA_CONFIG["max_canvas_side"]
-        or canvas_width * canvas_height
-        > PANORAMA_CONFIG["max_canvas_pixels"]
+        or max(canvas_width, canvas_height) > PANORAMA_CONFIG["max_canvas_side"]
+        or canvas_width * canvas_height > PANORAMA_CONFIG["max_canvas_pixels"]
     ):
         raise ValueError(
-            "파노라마 캔버스 크기가 비정상적입니다: "
-            f"{canvas_width}x{canvas_height}"
+            f"파노라마 캔버스 크기가 비정상적입니다: {canvas_width}x{canvas_height}"
         )
 
-    translation = np.array([
-        [1, 0, -float(lower[0])],
-        [0, 1, -float(lower[1])],
-        [0, 0, 1],
-    ], dtype=np.float64)
+    translation = np.array(
+        [
+            [1, 0, -float(lower[0])],
+            [0, 1, -float(lower[1])],
+            [0, 0, 1],
+        ],
+        dtype=np.float64,
+    )
 
     color_sum = np.zeros(
         (canvas_height, canvas_width, 3),
@@ -409,8 +384,8 @@ def build_panorama(images, transforms):
 
     crop_x, crop_y, crop_width, crop_height = cv2.boundingRect(valid_points)
     crop_slice = np.s_[
-        crop_y:crop_y + crop_height,
-        crop_x:crop_x + crop_width,
+        crop_y : crop_y + crop_height,
+        crop_x : crop_x + crop_width,
     ]
 
     return panorama[crop_slice], outline[crop_slice]
@@ -464,9 +439,7 @@ def stitch_panorama(
     method = method.upper()
 
     if method not in SUPPORTED_METHODS:
-        raise ValueError(
-            f"지원하지 않는 방법입니다: {method}"
-        )
+        raise ValueError(f"지원하지 않는 방법입니다: {method}")
     if not 0 < ratio < 1:
         raise ValueError("ratio는 0보다 크고 1보다 작아야 합니다.")
     if ransac_threshold <= 0:
@@ -506,10 +479,7 @@ def stitch_panorama(
         len(paths),
     )
 
-    images = [
-        read_image(path, max_side=max_side)
-        for path in paths
-    ]
+    images = [read_image(path, max_side=max_side) for path in paths]
     features = extract_features(images, paths, method)
     pair_transforms, pair_records = estimate_pair_transforms(
         images,
