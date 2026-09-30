@@ -53,19 +53,39 @@ def create_panorama_summary_figure(summary_rows, pyplot):
 # - stitcher_create.py가 생성한 세트별 panorama.jpg를 표시
 # - 직접 구현한 방법별 결과와 시각적으로 비교할 때 사용
 # ==========================================
-def create_builtin_stitcher_result_figure(result_rows, pyplot):
+def create_builtin_stitcher_result_figure(
+    result_rows,
+    pyplot,
+    *,
+    direct_summary_rows=None,
+    direct_method=None,
+):
     if not result_rows:
         raise ValueError("시각화할 OpenCV 내장 Stitcher 결과가 없습니다.")
 
+    # 직접 구현 결과를 함께 받으면 세트별로 아래 행에 배치한다.
+    direct_rows_by_set = {}
+    if direct_summary_rows is not None:
+        if direct_method is None:
+            raise ValueError("직접 구현 결과를 표시하려면 direct_method가 필요합니다.")
+        selected_method = str(direct_method).upper()
+        direct_rows_by_set = {
+            row["set"]: row
+            for row in direct_summary_rows
+            if str(row["method"]).upper() == selected_method
+        }
+
+    row_count = 2 if direct_rows_by_set else 1
     figure, axes = pyplot.subplots(
-        1,
+        row_count,
         len(result_rows),
-        figsize=(7 * len(result_rows), 4),
+        figsize=(7 * len(result_rows), 4 * row_count),
         constrained_layout=True,
     )
-    axes = np.atleast_1d(axes)
+    axes = np.asarray(axes, dtype=object).reshape(row_count, len(result_rows))
 
-    for axis, result in zip(axes, result_rows):
+    for column, result in enumerate(result_rows):
+        axis = axes[0, column]
         output_path = result.get("output_path")
         if output_path is not None and Path(output_path).is_file():
             axis.imshow(read_image_for_display(output_path, max_width=900))
@@ -87,7 +107,37 @@ def create_builtin_stitcher_result_figure(result_rows, pyplot):
         axis.set_xticks([])
         axis.set_yticks([])
 
-    figure.suptitle("OpenCV 내장 Stitcher 파노라마 결과", fontsize=16)
+        direct_row = direct_rows_by_set.get(result["set"])
+        if direct_row is None:
+            continue
+
+        direct_axis = axes[1, column]
+        direct_path = direct_row.get("panorama_path")
+        if direct_path is not None and Path(direct_path).is_file():
+            direct_axis.imshow(read_image_for_display(direct_path, max_width=900))
+        else:
+            direct_axis.text(
+                0.5,
+                0.5,
+                "직접 구현 파노라마가 생성되지 않았습니다.",
+                ha="center",
+                va="center",
+                wrap=True,
+            )
+        direct_axis.set_title(
+            f"{result['set']} / 직접 구현 {selected_method}",
+            fontsize=11,
+        )
+        direct_axis.set_xticks([])
+        direct_axis.set_yticks([])
+
+    if direct_rows_by_set:
+        figure.suptitle(
+            f"OpenCV 내장 Stitcher와 직접 구현 {selected_method} 결과 비교",
+            fontsize=16,
+        )
+    else:
+        figure.suptitle("OpenCV 내장 Stitcher 파노라마 결과", fontsize=16)
     return figure
 
 
@@ -174,7 +224,15 @@ def create_panorama_matching_gallery_figure(
     matching_dir = (
         Path(panorama_result_dir) / str(set_name) / str(method).upper() / "matching"
     )
-    matching_paths = sorted(matching_dir.glob("*.png"))
+    stage_order = {"raw": 0, "filtered": 1, "ransac": 2}
+    matching_paths = sorted(
+        matching_dir.glob("*.png"),
+        key=lambda path: (
+            path.stem.rpartition("_")[0],
+            stage_order.get(path.stem.rpartition("_")[2], len(stage_order)),
+            path.name,
+        ),
+    )
     if not matching_paths:
         raise FileNotFoundError(f"매칭 이미지를 찾을 수 없습니다: {matching_dir}")
     if column_count <= 0:
